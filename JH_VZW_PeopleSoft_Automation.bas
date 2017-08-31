@@ -1,5 +1,10 @@
-Attribute VB_Name = "PS_Automation"
+Attribute VB_Name = "JH_VZW_PeopleSoft_Automation"
 Option Explicit
+
+' PeopleSoft Automation Module
+' used Selenium to automate PS UI
+'
+' joseph.huntley@vzw.com
 
 
 ' ------------------------------------------------
@@ -27,6 +32,17 @@ Enum PeopleSoft_Page_CheckboxAction
     SetAsChecked = 1
     SetAsUnchecked = 2
 End Enum
+
+
+Type PeopleSoft_Page_PopupCheckResult
+    HasPopup As Boolean
+    PopupText As String
+    PopupElementID As String
+    HasButtonOk As Boolean
+    HasButtonCancel As Boolean
+    HasButtonYes As Boolean
+    HasButtonNo As Boolean
+End Type
 
 ' ------------------------------------------------
 ' PO Fields
@@ -385,7 +401,9 @@ Public Function PeopleSoft_NewSession(user As String, pass As String) As PeopleS
     Dim session As PeopleSoft_Session
     Dim driver As New SeleniumWrapper.WebDriver
     
+    
     Set session.driver = driver
+    
     
     
     session.user = user
@@ -399,7 +417,7 @@ End Function
 
 Public Function PeopleSoft_Login(ByRef session As PeopleSoft_Session) As Boolean
     
-    'On Error GoTo ExceptionThrown
+    On Error GoTo ExceptionThrown
     
     Dim driver As SeleniumWrapper.WebDriver
     
@@ -858,9 +876,14 @@ End Function
 Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As PeopleSoft_Session, ByRef poCFQ As PeopleSoft_PurchaseOrder_CreateFromQuoteParams) As Boolean
 
     On Error GoTo ExceptionThrown
+    
+    Output_Print "PeopleSoft_PurchaseOrder_CreateFromQuote"
+    Output_Indent_Increase
+    
+    
 
 
-    Dim driver As SeleniumWrapper.WebDriver
+    Dim driver As SeleniumWrapper.WebDriver, By As New SeleniumWrapper.By
 
     
     If Not session.loggedIn Then
@@ -901,27 +924,63 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     
     'Dim elemSelect As SeleniumWrapper.Select
     Dim elemSelect As SeleniumWrapper.WebElement
+    Dim selectOptions As WebElementCollection, selectOptionsElement As WebElement
     
-    ' Select Copy Purchase Order from eQuote
     Set elemSelect = driver.findElementById("PO_COPY_TMPLT_W_COPY_PO_FROM")
-    elemSelect.Click
     
-    elemSelect.AsSelect.selectByValue "Q"
+    Debug.Print "PO_COPY_TMPLT_W_COPY_PO_FROM - Options"
     
-    Debug.Print
+    Set selectOptions = elemSelect.AsSelect.Options
     
-    driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); addchg_win0(elem); submitAction_win0(elem.form,elem.name);"
+    For Each selectOptionsElement In selectOptions
+        Debug.Print "- " & selectOptionsElement.getAttribute("value") & ":" & selectOptionsElement.Text
+    Next selectOptionsElement
     
-    Debug.Print
     
-    driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); elem.onchange();"
+    'elemSelect.Click
+    Dim tryNo As Long
+    
+    ' Select Copy Purchase Order from eQuote - Try a few different ways
+    For tryNo = 1 To 5
+        Debug.Print "Selecting from Dropdown: Try #" & tryNo
+            
+        Set elemSelect = driver.findElementById("PO_COPY_TMPLT_W_COPY_PO_FROM")
+        
+        Debug.Print elemSelect.AsSelect.Options
+        
+    
+        Select Case tryNo
+            Case 1:
+                Debug.Print "- Method: AsSelect.selectByText"
+                elemSelect.AsSelect.selectByText "eQuote"
+            Case 2:
+                Debug.Print "- Method: AsSelect.selectByValue"
+                elemSelect.AsSelect.selectByValue "Q"
+            Case 3:
+                Debug.Print "- Method: JS: Set value"
+                driver.runScript "javascript: document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM').value = 'Q';"
+            Case 4:
+                Debug.Print "- Method: JS: submitAction"
+                driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); addchg_win0(elem); submitAction_win0(elem.form,elem.name);"
+            Case 5:
+                Debug.Print "- Method: JS: invoke onChange"
+                driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); elem.onchange();"
+        End Select
+        
+        PeopleSoft_Page_WaitForProcessing driver
+        
+        If PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[text()='Create from Quote']")) Then
+            Exit For
+        End If
+    Next tryNo
+    
+    'Debug.Print
+    'driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); addchg_win0(elem); submitAction_win0(elem.form,elem.name);"
+    'Debug.Print
+    'driver.runScript "javascript: var elem = document.getElementById('PO_COPY_TMPLT_W_COPY_PO_FROM'); elem.onchange();"
    
-    PeopleSoft_Page_WaitForProcessing driver
-    
-    
-    
+    ' <h1 class="PSSRCHTITLE">Create from Quote</h1>
     driver.waitForElementPresent "xpath=.//*[text()='Create from Quote']"
-    'driver.verifyElementPresent "xpath=.//*[text()='Create from Quote']"
     
 
     ' Type Vendor ID
@@ -1249,7 +1308,7 @@ Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWra
 
     Dim isAnyDefaultSpecified As Boolean
     
-    Dim popUpText As String
+    Dim PopupText As String
     
     isAnyDefaultSpecified = False
     
@@ -1269,10 +1328,10 @@ Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWra
          PeopleSoft_Page_WaitForProcessing driver
          
          
-         popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+         PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
          
-         If Len(popUpText) > 0 Then
-            PO_Defaults.GlobalError = popUpText
+         If Len(PopupText) > 0 Then
+            PO_Defaults.GlobalError = PopupText
             PO_Defaults.HasGlobalError = True
          
             PeopleSoft_PurchaseOrder_PO_Defaults_Fill = False
@@ -1782,7 +1841,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
     ' -------------------------------------------------------------------
     ' Begin - PO Defaults Section
     ' -------------------------------------------------------------------
-    Dim popUpText As String, popUpIsExpected As Boolean
+    Dim PopupText As String, popUpIsExpected As Boolean
     Dim result As Boolean
     
     Dim modifyDefaults As Boolean
@@ -1813,7 +1872,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
             Exit Function
         End If
         
-        popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
         
         'If Len(popUpText) > 0 Then
         '    popUpIsExpected = InStr(1, popUpText, "Default values will be applied only to PO lines that are not received or invoiced") > 0
@@ -1829,7 +1888,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
         
         'driver.Wait 500 ' wait 0.5s
         
-        popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
         
         'If Len(popUpText) > 0 Then
         '    popUpIsExpected = InStr(1, popUpText, "This action will create a change order") > 0
@@ -1841,7 +1900,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
         '        GoTo ChangeOrderFailed
         '    End If
         'End If
-        popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
         
         'If Len(popUpText) > 0 Then
         '    popUpIsExpected = InStr(1, popUpText, "This PO has been dispatched, add/delete/change a line or schedule will create a change order.") > 0
@@ -2045,7 +2104,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
                 'driver.runScript "javascript:hAction_win0(document.win0,'PO_SCR_NAV_WRK_NEXT_ITEM_BUTTON', 0, 0, '', false, true);"
                 
                 
-                popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+                PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
                 
                 PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
             End If
@@ -2098,14 +2157,13 @@ ExceptionThrown:
 End Function
 
 
-
 Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleSoft_Session, ByRef rcpt As PeopleSoft_Receipt) As Boolean
 
 
 
 
 
-    'On Error GoTo ExceptionThrown
+    On Error GoTo ExceptionThrown
 
     'Dim session As PeopleSoft_Session
     Dim driver As New SeleniumWrapper.WebDriver
@@ -2149,12 +2207,8 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
         PO_BU_default = elem.getAttribute("value")
     
         If PO_BU_default <> rcpt.PO_BU Then
-            PeopleSoft_Page_SetValidatedField driver, _
-                ("RECV_PO_ADD_BUSINESS_UNIT"), _
-                rcpt.PO_BU, rcpt.PO_BU_Result
-                
+            PeopleSoft_Page_SetValidatedField driver, ("RECV_PO_ADD_BUSINESS_UNIT"), rcpt.PO_BU, rcpt.PO_BU_Result
             If rcpt.PO_BU_Result.ValidationFailed Then GoTo ValidationFailed
-            
         End If
     End If
     
@@ -2306,7 +2360,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
     
     
     ' Go through mapping/receive items. Click checkbox to receive.
-    ' If any of the receipt items have not been mapped. If so,
+    ' Check if any of the receipt items have not been mapped. If so,
     ' it has already been received or it is not receivable by the user
     
     
@@ -2326,8 +2380,6 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
             ' Check the box
             Set elem = driver.findElementById("RECV_PO_SCHEDULE$" & rowIndexMap(i))
             
-            
-            Dim tmp As String: tmp = elem.getAttribute("disabled")
             
             If elem.getAttribute("disabled") <> "disabled" Then
                 elem.Click '- Note: does not work if element not visible
@@ -2383,6 +2435,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
     
     
     ' Note: On next page the receipt items are displayed in order of Line, Schedule
+    ' ...OR if not, we check item IDs and PO lines to ensure they match
     ' -----------------------------------------------------------
     ' Begin - Sort Receipt Items by  Line,Schedule (Bubble Sort Algorithm)
     ' -----------------------------------------------------------
@@ -2454,16 +2507,17 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
                         rcpt.ReceiptItems(rcptIdx).ItemError = "Receipt line mismatch. ITEM ID: " & rcptLinePage_ITEM_ID & " (Expected: " & rcpt.ReceiptItems(rcptIdx).ITEM_ID & ")"
                         anyItemHasErrors = True
                     End If
-                    ' Partial match on Trans Item Desc
-                    Dim transItemDescPartial As String
-                    transItemDescPartial = Replace(rcpt.ReceiptItems(rcptIdx).TRANS_ITEM_DESC, "  ", " ") ' Convert double spaces to single spaces.
-                    transItemDescPartial = Left(transItemDescPartial, Len(rcptLinePage_TRANS_ITEM_DESC))
                     
-                    If rcpt.ReceiptItems(rcptIdx).HasError = False And rcptLinePage_TRANS_ITEM_DESC <> transItemDescPartial Then
+                    ' Partial match on Trans Item Desc - Disabled (causes issues)
+                    'Dim transItemDescPartial As String
+                    'transItemDescPartial = Replace(rcpt.ReceiptItems(rcptIdx).TRANS_ITEM_DESC, "  ", " ") ' Convert double spaces to single spaces.
+                    'transItemDescPartial = Left(transItemDescPartial, Len(rcptLinePage_TRANS_ITEM_DESC))
+                    
+                    'If rcpt.ReceiptItems(rcptIdx).HasError = False And rcptLinePage_TRANS_ITEM_DESC <> transItemDescPartial Then
                         'rcpt.ReceiptItems(rcptIdx).HasError = True
                         'rcpt.ReceiptItems(rcptIdx).ItemError = "Receipt line mismatch. TRANS_ITEM_DESC: " & rcptLinePage_TRANS_ITEM_DESC & " (Expected: " & transItemDescPartial & ")"
                         'anyItemHasErrors = True
-                    End If
+                    'End If
                 
                     ' First sanity check passed
                     If rcpt.ReceiptItems(rcptIdx).HasError = False Then
@@ -2506,7 +2560,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
         Next i
         
         
-        Dim popUpText As String, popUpIsExpected As Boolean
+        Dim PopupText As String, popUpIsExpected As Boolean
         
         
         
@@ -2521,7 +2575,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
             PeopleSoft_Page_WaitForProcessing driver
             
             
-            popUpText = PeopleSoft_Page_SuppressPopup(driver, vbYes)
+            PopupText = PeopleSoft_Page_SuppressPopup(driver, vbYes)
             'popUpIsExpected = InStr(1, popUpText, "Canceling Receipt cannot be reversed.") > 0
             
             'If popUpIsExpected = False Then
@@ -2550,36 +2604,86 @@ Public Function PeopleSoft_PurchaseOrder_ProcessReceipt(ByRef session As PeopleS
     'driver.findElementById("processing").waitForCssValue "visibility", "visible"
     driver.findElementById("SAVED_win0").waitForCssValue "visibility", "hidden"
 
-  
+    
+    
+    Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
 
+    Debug.Print "Expecting Popup: Have these receipt quantities been checked for accuracy"
+    popupCheckResult = PeopleSoft_Page_CheckForPopup(driver)
     
-    popUpText = PeopleSoft_Page_SuppressPopup(driver, vbYes)
-    popUpIsExpected = InStr(1, popUpText, "Have these receipt quantities been checked for accuracy") > 0
-    
-    If popUpIsExpected = False Then
+    If popupCheckResult.HasPopup = False Or InStr(1, popupCheckResult.PopupText, "Have these receipt quantities been checked for accuracy") = 0 Then
         rcpt.HasGlobalError = True
-        rcpt.GlobalError = "Unexpected popup: " & popUpText
+        rcpt.GlobalError = "Did not receive expected popup: Have these receipt quantities been checked for accuracy?" _
+                            & IIf(popupCheckResult.HasPopup, vbCrLf & "Popup received: " & popupCheckResult.PopupText, "")
         
         GoTo ReceiptFailed
     End If
     
-    
+    ' We received correct popup -> acknowledge
+    PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, vbYes
     PeopleSoft_Page_WaitForProcessing driver
     
+    'PopupText = PeopleSoft_Page_SuppressPopup(driver, vbYes)
+    'popUpIsExpected = InStr(1, PopupText, "Have these receipt quantities been checked for accuracy") > 0
     
-    popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-    popUpIsExpected = InStr(1, popUpText, "This means the receipt is being updated by the receipt integration process") > 0  ' TODO: Change
+    'If popUpIsExpected = False Then
+    '    rcpt.HasGlobalError = True
+    '    rcpt.GlobalError = "Unexpected popup: " & PopupText
+    '
+    '    GoTo ReceiptFailed
+    'End If
     
-    ' At this point, it doesnt matter if there is a popup
-    If False Then ' popUpIsExpected = False Then
+    
+    ' Check for receipt ID.
+    rcpt.RECEIPT_ID = driver.findElementById("RECV_HDR_RECEIVER_ID").Text
+    rcpt.RECEIPT_ID = Trim(rcpt.RECEIPT_ID)
+    Debug.Print "Receipt ID: " & rcpt.RECEIPT_ID
+    
+    
+    
+    If Not IsNumeric(rcpt.RECEIPT_ID) Then
         rcpt.HasGlobalError = True
-        rcpt.GlobalError = "Unexpected popup: " & popUpText
-        
+        rcpt.GlobalError = "Non-numeric receipt ID not found on page: " & rcpt.RECEIPT_ID
+    
         GoTo ReceiptFailed
     End If
     
     
-    rcpt.RECEIPT_ID = driver.findElementById("RECV_HDR_RECEIVER_ID").Text
+    ' Receipt ID provided -> at this point it doesnt matter what shows up, just acknowledge it
+    Dim popupCountCheck As Integer: popupCountCheck = 0
+    
+    Do
+        popupCheckResult = PeopleSoft_Page_CheckForPopup(driver)
+        If popupCheckResult.HasPopup = False Then Exit Do
+        
+        popupCountCheck = popupCountCheck + 1
+        Debug.Print "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.PopupText
+        'rcpt.GlobalError = rcpt.GlobalError & "Popup Received after Receipt " & popupCountCheck & ": " & popupCheckResult.PopupText & vbCrLf
+    
+        If popupCheckResult.HasButtonYes Then ' Either Yes or OK....
+            PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, vbYes
+        Else
+            PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, vbOK
+        End If
+        
+        PeopleSoft_Page_WaitForProcessing driver
+    Loop
+        
+    
+    
+    
+    
+    'PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+    'popUpIsExpected = InStr(1, PopupText, "This means the receipt is being updated by the receipt integration process") > 0  ' TODO: Change
+    
+    ' At this point, it doesnt matter if there is a popup
+    'If False Then ' popUpIsExpected = False Then
+    '    rcpt.HasGlobalError = True
+    '    rcpt.GlobalError = "Unexpected popup: " & PopupText
+        
+    '    GoTo ReceiptFailed
+    'End If
+    
     
     PeopleSoft_PurchaseOrder_ProcessReceipt = True
     Exit Function
@@ -2832,12 +2936,12 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
     
     
-    Dim popUpText As String
+    Dim PopupText As String
     
-    popUpText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+    PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
     
-    If Len(popUpText) > 0 Then ' Error while saving
-        budgetCheckResult.GlobalError = popUpText
+    If Len(PopupText) > 0 Then ' Error while saving
+        budgetCheckResult.GlobalError = PopupText
         budgetCheckResult.HasGlobalError = True
         
         PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
@@ -3058,7 +3162,118 @@ Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver
     
 
 End Sub
-Public Function PeopleSoft_Page_SuppressPopup(driver As SeleniumWrapper.WebDriver, clickButton As VbMsgBoxResult) As String
+Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDriver) As PeopleSoft_Page_PopupCheckResult
+
+    Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
+    
+    popupCheckResult.HasPopup = False
+
+
+
+    On Error GoTo PopupNotFoundOrErr
+
+    Dim we As SeleniumWrapper.WebElement, By As New SeleniumWrapper.By
+    Dim wePopupModals As WebElementCollection
+    
+    
+    Set wePopupModals = driver.findElementsByXPath(".//*[contains(@id,'ptModContent_')]", 100)
+    
+    'no popup modals found?
+    If wePopupModals.Count = 0 Then
+        Debug.Print "PeopleSoft_Page_CheckForPopup: No popup found"
+        
+        PeopleSoft_Page_CheckForPopup = popupCheckResult
+        Exit Function
+    End If
+    
+    popupCheckResult.HasPopup = True
+    
+    popupCheckResult.PopupElementID = wePopupModals(0).getAttribute("id")
+    
+    Set we = driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='alertmsg']/span")
+    popupCheckResult.PopupText = we.Text
+    
+    
+    popupCheckResult.HasButtonOk = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICOK']"), 10)
+    popupCheckResult.HasButtonCancel = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICCancel']"), 10)
+    popupCheckResult.HasButtonYes = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICYes']"), 10)
+    popupCheckResult.HasButtonNo = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICNo']"), 10)
+    
+        
+    PeopleSoft_Page_CheckForPopup = popupCheckResult
+    
+    Debug.Print "PeopleSoft_Page_CheckForPopup: ID='" & popupCheckResult.PopupElementID & "', " _
+                & "Buttons=(" & IIf(popupCheckResult.HasButtonYes, "Yes", "") & IIf(popupCheckResult.HasButtonNo, "|No", "") & IIf(popupCheckResult.HasButtonOk, "|OK", "") & IIf(popupCheckResult.HasButtonCancel, "|Cancel", "") & "), " _
+                & "Text='" & popupCheckResult.PopupText & "'"
+    
+    Exit Function
+    
+PopupNotFoundOrErr:
+    popupCheckResult.HasPopup = False
+    popupCheckResult.PopupElementID = ""
+    popupCheckResult.PopupText = ""
+    
+    PeopleSoft_Page_CheckForPopup = popupCheckResult
+    
+    Debug.Print "PeopleSoft_Page_CheckForPopup: No popup found or error: " & Err.Description
+
+End Function
+Public Sub PeopleSoft_Page_AcknowledgePopup(driver As SeleniumWrapper.WebDriver, ByRef popupCheckResult As PeopleSoft_Page_PopupCheckResult, clickButton As VbMsgBoxResult)
+    
+    On Error GoTo ExceptionThrown
+    
+    If clickButton = vbOK Then
+      driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICOK']").Click
+    ElseIf clickButton = vbCancel Then
+      driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICCancel']").Click
+    ElseIf clickButton = vbYes Then
+      driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICYes']").Click
+    ElseIf clickButton = vbNo Then
+      driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICNo']").Click
+    End If
+    
+    
+    Exit Sub
+    
+ExceptionThrown:
+    Err.Raise Err.Number, Err.Source, "PeopleSoft_Page_AcknowledgePopup: " & Err.Description, Err.Helpfile, Err.HelpContext
+
+End Sub
+Public Function PeopleSoft_Page_SuppressPopup(driver As SeleniumWrapper.WebDriver, clickButton As VbMsgBoxResult, Optional matchText As String = "") As String
+
+    Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
+
+    On Error GoTo ExceptionThrown
+
+
+    popupCheckResult = PeopleSoft_Page_CheckForPopup(driver)
+    
+    If popupCheckResult.HasPopup = False Then
+        Debug.Print "PeopleSoft_Page_SuppressPopup: no popup found"
+        Exit Function
+    End If
+    
+    
+    PeopleSoft_Page_SuppressPopup = popupCheckResult.PopupText
+    
+    If matchText <> "" Then
+        If Not popupCheckResult.PopupText Like matchText Then
+            Debug.Print "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match '" & matchText & "'"
+            Err.Raise -1, , "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match." & vbCrLf & "Popup Text: " & popupCheckResult.PopupText & vbCrLf & "Match: " & matchText & ""
+            Exit Function
+        End If
+    End If
+    
+    PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, clickButton
+    
+    Exit Function
+
+ExceptionThrown:
+    Err.Raise Err.Number, Err.Source, "PeopleSoft_Page_SuppressPopup: " & Err.Description, Err.Helpfile, Err.HelpContext
+
+End Function
+
+Public Function PeopleSoft_Page_SuppressPopup_Old(driver As SeleniumWrapper.WebDriver, clickButton As VbMsgBoxResult) As String
 
 
 On Error GoTo PopupNotFoundOrErr
@@ -3070,6 +3285,7 @@ On Error GoTo PopupNotFoundOrErr
     
     Dim wePopupModals As WebElementCollection
     Dim wePopupModal As WebElement
+    Dim PopupText As String
     
     Dim popupModalContentID As String
     
@@ -3091,8 +3307,8 @@ On Error GoTo PopupNotFoundOrErr
     Set we = driver.findElementByXPath(".//*[@id='" & popupModalContentID & "']/descendant::*[@id='alertmsg']/span")
     
     'Debug.Print "modal content text: " & we.Text
-    
-    PeopleSoft_Page_SuppressPopup = we.Text
+    PopupText = we.Text
+    PeopleSoft_Page_SuppressPopup_Old = PopupText
     
     
     If clickButton = vbOK Then
@@ -3116,6 +3332,7 @@ On Error GoTo PopupNotFoundOrErr
     
     
 PopupNotFoundOrErr:
+    Debug.Print "PeopleSoft_Page_SuppressPopup: " & PopupText
 
 End Function
 Private Function CurrencyFromString(strCur As String) As Currency
