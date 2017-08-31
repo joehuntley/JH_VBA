@@ -1,8 +1,8 @@
-Attribute VB_Name = "JH_ReportingAutomation"
+Attribute VB_Name = "JH_VZW_ReportingAutomation"
 Option Explicit
 
 
-' JH_ReportingAutomation
+' JH_VZW_ReportingAutomation
 ' ------------------------------------------------------------------------------------------------------------------
 ' VBA functions to interact with and process data from VZW reporting tools such as ALPT, NCWS, MPT
 '
