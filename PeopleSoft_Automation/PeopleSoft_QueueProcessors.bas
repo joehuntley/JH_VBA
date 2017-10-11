@@ -1,16 +1,56 @@
 Attribute VB_Name = "PeopleSoft_QueueProcessors"
 Option Explicit
 
+' PeopleSoft_QueueProcessors
+' ------------------------------------------------
+' All the routines below are meant to
+'  (1) Load the spreadsheet data into PeopleSoft_Automation structures. This involves converting a flat spreadsheet into a parent-child structures with the help of SpreadsheetTableToMultiLevelMap_2D()
+'  (2) Perform any pre-process checking
+'  (3) Call the respective PeopleSoft automation function for each parent unit
+'  (4) Read any output and write back to the mapped row for each unit.
 
+Private Type PS_Automation_Config_Options
+    Q_MAX_CONSECUTIVE_ERRORS As Integer
+End Type
 
-Private Const Q_MAX_CONSECUTIVE_FAILURES = 5  ' defines
+Private CONFIG_OPTIONS As PS_Automation_Config_Options
+Private Sub Initialize()
+    ' Loads configuration options. Call before running any queues.
+    
+    
+    Dim CFG_MAX_CONSECUTIVE_ERRORS As Integer
+    Dim CFG_DEBUGOPTS_CAPTURE_EXCEPTIONS As Boolean
+    Dim CFG_DEBUGOPTS_ADD_METHOD_NAMES As Boolean
+    Dim CFG_DEBUGOPTS_SAVE_OUTPUT As Boolean
+    Dim CFG_DEBUGOPTS_SAVE_SCREENSHOTS As Boolean
+    Dim CFG_DEBUGOPTS_SAVE_PAGE_SRC As Boolean
+    
+    CFG_MAX_CONSECUTIVE_ERRORS = ThisWorkbook.Names("CFG_MAX_CONSECUTIVE_ERRORS").RefersToRange.Value
+    CFG_DEBUGOPTS_CAPTURE_EXCEPTIONS = ThisWorkbook.Names("CFG_DEBUGOPTS_CAPTURE_EXCEPTIONS").RefersToRange.Value
+    CFG_DEBUGOPTS_ADD_METHOD_NAMES = ThisWorkbook.Names("CFG_DEBUGOPTS_ADD_METHOD_NAMES").RefersToRange.Value
+    CFG_DEBUGOPTS_SAVE_OUTPUT = ThisWorkbook.Names("CFG_DEBUGOPTS_SAVE_OUTPUT").RefersToRange.Value
+    CFG_DEBUGOPTS_SAVE_SCREENSHOTS = ThisWorkbook.Names("CFG_DEBUGOPTS_SAVE_SCREENSHOTS").RefersToRange.Value
+    CFG_DEBUGOPTS_SAVE_PAGE_SRC = ThisWorkbook.Names("CFG_DEBUGOPTS_SAVE_PAGE_SRC").RefersToRange.Value
+
+    CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS = CFG_MAX_CONSECUTIVE_ERRORS
+    
+    PeopleSoft_SetConfigOptions captureExceptionsAsError:=CFG_DEBUGOPTS_CAPTURE_EXCEPTIONS, _
+                addMethodNamesToExceptions:=CFG_DEBUGOPTS_ADD_METHOD_NAMES, _
+                writeDebugOutputToFile:=CFG_DEBUGOPTS_SAVE_OUTPUT, _
+                writePageSrcToFile:=CFG_DEBUGOPTS_SAVE_SCREENSHOTS, _
+                takeScreenShot:=CFG_DEBUGOPTS_SAVE_PAGE_SRC
+    
+
+End Sub
 
 
 Public Sub Process_PO_Queue()
 
 
-    Dim i As Integer, j As Integer
+    Call Initialize
 
+
+    Dim i As Integer, j As Integer
     Dim queueTableRange As Range
     
     
@@ -23,10 +63,10 @@ Public Sub Process_PO_Queue()
     Dim C_QUEUE_ID As Integer
     Dim C_TAG As Integer
     Dim C_PO_BUSINESS_UNIT As Integer
-    Dim C_PO_VENDOR_NAME_SHORT As Integer
+    Dim C_PO_VENDOR As Integer
     Dim C_PO_VENDOR_LOCATION As Integer
     Dim C_PO_BUYER_ID As Integer
-    Dim C_PO_APPROVER_ID As Integer
+    Dim C_PO_XPRESS_BID_ID As Integer
     Dim C_PO_QUOTE As Integer
     Dim C_PO_QUOTE_ATTACHMENT As Integer
     Dim C_PO_REF As Integer
@@ -54,10 +94,10 @@ Public Sub Process_PO_Queue()
     col = col + 1: C_QUEUE_ID = col
     col = col + 1: C_TAG = col
     col = col + 1: C_PO_BUSINESS_UNIT = col
-    col = col + 1: C_PO_VENDOR_NAME_SHORT = col
+    col = col + 1: C_PO_VENDOR = col
     col = col + 1: C_PO_VENDOR_LOCATION = col
     col = col + 1: C_PO_BUYER_ID = col
-    col = col + 1: C_PO_APPROVER_ID = col
+    col = col + 1: C_PO_XPRESS_BID_ID = col
     col = col + 1: C_PO_QUOTE = col
     col = col + 1: C_PO_QUOTE_ATTACHMENT = col
     col = col + 1: C_PO_REF = col
@@ -112,13 +152,19 @@ Public Sub Process_PO_Queue()
             
             If idxChild = 1 Then
                 POs(idxParent).PO_Fields.PO_BUSINESS_UNIT = queueTableRange.Cells(curRow, C_PO_BUSINESS_UNIT).Value
-                POs(idxParent).PO_Fields.VENDOR_NAME_SHORT = queueTableRange.Cells(curRow, C_PO_VENDOR_NAME_SHORT).Value
                 POs(idxParent).PO_Fields.PO_HDR_VENDOR_LOCATION = queueTableRange.Cells(curRow, C_PO_VENDOR_LOCATION).Value
                 POs(idxParent).PO_Fields.PO_HDR_BUYER_ID = queueTableRange.Cells(curRow, C_PO_BUYER_ID).Value
-                POs(idxParent).PO_Fields.PO_HDR_APPROVER_ID = queueTableRange.Cells(curRow, C_PO_APPROVER_ID).Value
+                POs(idxParent).PO_Fields.PO_HDR_XPRESS_BID_ID = queueTableRange.Cells(curRow, C_PO_XPRESS_BID_ID).Value
                 POs(idxParent).PO_Fields.PO_HDR_QUOTE = queueTableRange.Cells(curRow, C_PO_QUOTE).Value
                 POs(idxParent).PO_Fields.PO_HDR_PO_REF = queueTableRange.Cells(curRow, C_PO_REF).Value
                 POs(idxParent).PO_Fields.PO_HDR_COMMENTS = queueTableRange.Cells(curRow, C_PO_COMMENTS).Value
+                
+                ' Allow vendor to be either a number (vendor ID) or the sort vendor name
+                If IsNumeric(queueTableRange.Cells(curRow, C_PO_VENDOR).Value) Then
+                    POs(idxParent).PO_Fields.PO_HDR_VENDOR_ID = CLng(queueTableRange.Cells(curRow, C_PO_VENDOR).Value)
+                Else
+                    POs(idxParent).PO_Fields.VENDOR_NAME_SHORT = queueTableRange.Cells(curRow, C_PO_VENDOR).Value
+                End If
                 
                 POs(idxParent).PO_Fields.Quote_Attachment_FilePath = queueTableRange.Cells(curRow, C_PO_QUOTE_ATTACHMENT).Value
             End If
@@ -126,7 +172,7 @@ Public Sub Process_PO_Queue()
             PeopleSoft_PurchaseOrder_AddLineSimple POs(idxParent), _
                Trim(CStr(queueTableRange.Cells(curRow, C_PO_LINE_ITEMID).Value)), _
                Trim(CStr(queueTableRange.Cells(curRow, C_PO_LINE_DESC).Value)), _
-               CDec(queueTableRange.Cells(curRow, C_PO_SCH_QTY).Value), _
+               CCur(queueTableRange.Cells(curRow, C_PO_SCH_QTY).Value), _
                CDate(queueTableRange.Cells(curRow, C_PO_SCH_DUE_DATE).Value), _
                CLng(queueTableRange.Cells(curRow, C_PO_SCH_SHIPTO_ID).Value), _
                CStr(queueTableRange.Cells(curRow, C_PO_DIST_BUSINESS_UNIT_PC).Value), _
@@ -250,12 +296,12 @@ Public Sub Process_PO_Queue()
                 With POs(idxParent).PO_Fields
                     If .PO_BUSINESS_UNIT_Result.ValidationFailed Then _
                         poErrString = poErrString & "|" & "PO_BUSINESS_UNIT: " & .PO_BUSINESS_UNIT_Result.ValidationErrorText & vbCrLf
-                    If .PO_HDR_APPROVER_ID_Result.ValidationFailed Then _
-                        poErrString = poErrString & "|" & "PO_HDR_APPROVER_ID: " & .PO_HDR_APPROVER_ID_Result.ValidationErrorText & vbCrLf
+                    'If .PO_HDR_APPROVER_ID_Result.ValidationFailed Then _
+                    '    poErrString = poErrString & "|" & "PO_HDR_APPROVER_ID: " & .PO_HDR_APPROVER_ID_Result.ValidationErrorText & vbCrLf
                     If .PO_HDR_BUYER_ID_Result.ValidationFailed Then _
                         poErrString = poErrString & "|" & "PO_HDR_BUYER_ID: " & .PO_HDR_BUYER_ID_Result.ValidationErrorText & vbCrLf
-                    'If .PO_HDR_VENDOR_ID_Result.ValidationFailed Then _
-                    '    poErrString = poErrString & "|" & "PO_HDR_VENDOR_ID: " & .PO_HDR_VENDOR_ID_Result.ValidationErrorText & vbCrLf
+                    If .PO_HDR_VENDOR_ID_Result.ValidationFailed Then _
+                        poErrString = poErrString & "|" & "PO_HDR_VENDOR_ID: " & .PO_HDR_VENDOR_ID_Result.ValidationErrorText & vbCrLf
                     If .VENDOR_NAME_SHORT_Result.ValidationFailed Then _
                         poErrString = poErrString & "|" & "VENDOR_NAME_SHORT: " & .VENDOR_NAME_SHORT_Result.ValidationErrorText & vbCrLf
                     If .PO_HDR_VENDOR_LOCATION_Result.ValidationFailed Then _
@@ -295,7 +341,7 @@ Public Sub Process_PO_Queue()
             
                     curRow = ssMap.PARENT_MAP(idxParent).MAP_CHILD_TO_ROW(idxChild)
                     
-                    queueTableRange.Cells(curRow, C_PO_NUM).Value = "<ERROR>"
+                    queueTableRange.Cells(curRow, C_PO_NUM).Value = IIf(Len(POs(idxParent).PO_ID) > 0, POs(idxParent).PO_ID, "<ERROR>")
                     queueTableRange.Cells(curRow, C_PO_ERROR).Value = POs(idxParent).GlobalError & IIf(Len(poErrString) > 0, vbCrLf & poErrString, "")
                     queueTableRange.Cells(curRow, C_LINE_ERROR).Value = lineErrString
                     
@@ -307,7 +353,7 @@ Public Sub Process_PO_Queue()
                 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -323,7 +369,8 @@ Public Sub Process_PO_Queue()
 End Sub
 Public Sub Process_PO_Queue_RetryBudgetCheck()
 
-'WORK IN PROGRESS
+    Call Initialize
+    
 
     Dim i As Integer, j As Integer
 
@@ -338,11 +385,12 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
     Dim C_QUEUE_ID As Integer
     Dim C_TAG As Integer
     Dim C_PO_BUSINESS_UNIT As Integer
-    Dim C_PO_VENDOR_NAME_SHORT As Integer
+    Dim C_PO_VENDOR As Integer
     Dim C_PO_VENDOR_LOCATION As Integer
     Dim C_PO_BUYER_ID As Integer
-    Dim C_PO_APPROVER_ID As Integer
+    Dim C_PO_XPRESS_BID_ID As Integer
     Dim C_PO_QUOTE As Integer
+    Dim C_PO_QUOTE_ATTACHMENT As Integer
     Dim C_PO_REF As Integer
     Dim C_PO_COMMENTS As Integer
     Dim C_PO_LINE As Integer
@@ -368,11 +416,12 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
     col = col + 1: C_QUEUE_ID = col
     col = col + 1: C_TAG = col
     col = col + 1: C_PO_BUSINESS_UNIT = col
-    col = col + 1: C_PO_VENDOR_NAME_SHORT = col
+    col = col + 1: C_PO_VENDOR = col
     col = col + 1: C_PO_VENDOR_LOCATION = col
     col = col + 1: C_PO_BUYER_ID = col
-    col = col + 1: C_PO_APPROVER_ID = col
+    col = col + 1: C_PO_XPRESS_BID_ID = col
     col = col + 1: C_PO_QUOTE = col
+    col = col + 1: C_PO_QUOTE_ATTACHMENT = col
     col = col + 1: C_PO_REF = col
     col = col + 1: C_PO_COMMENTS = col
     col = col + 1: C_PO_LINE = col
@@ -393,6 +442,7 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
     col = col + 1: C_PO_ERROR = col
     col = col + 1: C_LINE_ERROR = col
 
+    
     
     
     
@@ -417,7 +467,9 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
     ReDim PO_BCs(1 To ssMap.PARENT_COUNT) As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams
     ReDim PO_BCs_DoNotProcess(1 To ssMap.PARENT_COUNT) As Boolean
     
-    ' Defauilt - do not try to save with budget check
+    ' Default state: do not try to save with budget check
+    PO_BCs_DoNotProcessCount = ssMap.PARENT_COUNT
+    
     For idxParent = 1 To ssMap.PARENT_COUNT
         PO_BCs_DoNotProcess(idxParent) = True
     Next idxParent
@@ -437,7 +489,7 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
             ' and one of the lines has a budget error
             If PO_BCs_DoNotProcess(idxParent) = True And queueTableRange.Cells(curRow, C_PO_NUM).Value <> "" And queueTableRange.Cells(curRow, C_LINE_BUDGET_ERR).Value <> "" Then
                 PO_BCs_DoNotProcess(idxParent) = False
-                PO_BCs_DoNotProcessCount = PO_BCs_DoNotProcessCount + 1
+                PO_BCs_DoNotProcessCount = PO_BCs_DoNotProcessCount - 1
             End If
         End If
     Next curRow
@@ -549,7 +601,7 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
                 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -562,12 +614,12 @@ Public Sub Process_PO_Queue_RetryBudgetCheck()
 
 
 
-    
-    Debug.Print
 
 End Sub
-Public Sub Process_PO_eQuote_Q()
 
+Public Sub Process_PO_eQuote_Queue()
+
+    Call Initialize
 
     Dim i As Integer, j As Integer
 
@@ -588,7 +640,7 @@ Public Sub Process_PO_eQuote_Q()
     Dim C_PO_VENDOR_ID As Integer
     Dim C_PO_VENDOR_LOCATION As Integer
     Dim C_PO_BUYER_ID As Integer
-    Dim C_PO_APPROVER_ID As Integer
+    'Dim C_PO_APPROVER_ID As Integer
     Dim C_PO_REF As Integer
     Dim C_PO_COMMENTS As Integer
     
@@ -625,7 +677,7 @@ Public Sub Process_PO_eQuote_Q()
     col = col + 1: C_PO_VENDOR_ID = col
     col = col + 1: C_PO_VENDOR_LOCATION = col
     col = col + 1: C_PO_BUYER_ID = col
-    col = col + 1: C_PO_APPROVER_ID = col
+    'col = col + 1: C_PO_APPROVER_ID = col
     col = col + 1: C_PO_REF = col
     col = col + 1: C_PO_COMMENTS = col
     
@@ -692,16 +744,16 @@ Public Sub Process_PO_eQuote_Q()
                 PO_CFQs(idxParent).PO_Fields.PO_HDR_VENDOR_ID = queueTableRange.Cells(curRow, C_PO_VENDOR_ID).Value
                 PO_CFQs(idxParent).PO_Fields.PO_HDR_VENDOR_LOCATION = queueTableRange.Cells(curRow, C_PO_VENDOR_LOCATION).Value
                 PO_CFQs(idxParent).PO_Fields.PO_HDR_BUYER_ID = queueTableRange.Cells(curRow, C_PO_BUYER_ID).Value
-                PO_CFQs(idxParent).PO_Fields.PO_HDR_APPROVER_ID = queueTableRange.Cells(curRow, C_PO_APPROVER_ID).Value
+                'PO_CFQs(idxParent).PO_Fields.PO_HDR_APPROVER_ID = queueTableRange.Cells(curRow, C_PO_APPROVER_ID).Value
                 PO_CFQs(idxParent).PO_Fields.PO_HDR_PO_REF = queueTableRange.Cells(curRow, C_PO_REF).Value
                 PO_CFQs(idxParent).PO_Fields.PO_HDR_COMMENTS = queueTableRange.Cells(curRow, C_PO_COMMENTS).Value
                 
                 PO_CFQs(idxParent).PO_Defaults.SCH_DUE_DATE = queueTableRange.Cells(curRow, C_PO_DUE_DATE).Value
-                PO_CFQs(idxParent).PO_Defaults.SCH_SHIPTO_ID = queueTableRange.Cells(curRow, C_PO_SHIPTO_ID).Value
-                PO_CFQs(idxParent).PO_Defaults.DIST_BUSINESS_UNIT_PC = queueTableRange.Cells(curRow, C_PO_BUSINESS_UNIT_PC).Value
-                PO_CFQs(idxParent).PO_Defaults.DIST_PROJECT_CODE = queueTableRange.Cells(curRow, C_PO_PROJECT_CODE).Value
-                PO_CFQs(idxParent).PO_Defaults.DIST_ACTIVITY_ID = queueTableRange.Cells(curRow, C_PO_ACTIVITY_ID).Value
-                PO_CFQs(idxParent).PO_Defaults.DIST_LOCATION_ID = queueTableRange.Cells(curRow, C_PO_LOCATION_ID).Value
+                PO_CFQs(idxParent).PO_Defaults.DIST_CAP_SHIP_TO_ID = queueTableRange.Cells(curRow, C_PO_SHIPTO_ID).Value
+                PO_CFQs(idxParent).PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC = queueTableRange.Cells(curRow, C_PO_BUSINESS_UNIT_PC).Value
+                PO_CFQs(idxParent).PO_Defaults.DIST_CAP_PROJECT_CODE = queueTableRange.Cells(curRow, C_PO_PROJECT_CODE).Value
+                PO_CFQs(idxParent).PO_Defaults.DIST_CAP_ACTIVITY_ID = queueTableRange.Cells(curRow, C_PO_ACTIVITY_ID).Value
+                PO_CFQs(idxParent).PO_Defaults.DIST_CAP_LOCATION_ID = queueTableRange.Cells(curRow, C_PO_LOCATION_ID).Value
                 
                 PO_CFQs(idxParent).PO_LineModCount = ssMap.PARENT_MAP(idxParent).CHILD_COUNT
                 
@@ -709,7 +761,6 @@ Public Sub Process_PO_eQuote_Q()
             End If
             
             If queueTableRange.Cells(curRow, C_PO_LINE).Value <> "" Then
-                                
                 PO_CFQs(idxParent).PO_LineMods(idxChild).PO_Line = CInt(queueTableRange.Cells(curRow, C_PO_LINE).Value)
                 
                 PO_CFQs(idxParent).PO_LineMods(idxChild).PO_LINE_ITEM_ID = queueTableRange.Cells(curRow, C_PO_LINE_ITEMID).Value
@@ -722,7 +773,7 @@ Public Sub Process_PO_eQuote_Q()
                 PO_CFQs(idxParent).PO_LineMods(idxChild).DIST_LOCATION_ID = queueTableRange.Cells(curRow, C_PO_DIST_LOCATION_ID).Value
             
             Else
-                PO_CFQs(idxParent).PO_LineMods(idxChild).PO_Line = -9999  'will not process
+                PO_CFQs(idxParent).PO_LineMods(idxChild).PO_Line = -9999  'invalid line ID (negative #): will not process
             End If
 
 
@@ -833,8 +884,8 @@ Public Sub Process_PO_eQuote_Q()
                 With PO_CFQs(idxParent).PO_Fields
                     If .PO_BUSINESS_UNIT_Result.ValidationFailed Then _
                         poErrString = poErrString & "|" & "PO_BUSINESS_UNIT: " & .PO_BUSINESS_UNIT_Result.ValidationErrorText & vbCrLf
-                    If .PO_HDR_APPROVER_ID_Result.ValidationFailed Then _
-                        poErrString = poErrString & "|" & "PO_HDR_APPROVER_ID: " & .PO_HDR_APPROVER_ID_Result.ValidationErrorText & vbCrLf
+                    'If .PO_HDR_APPROVER_ID_Result.ValidationFailed Then _
+                    '    poErrString = poErrString & "|" & "PO_HDR_APPROVER_ID: " & .PO_HDR_APPROVER_ID_Result.ValidationErrorText & vbCrLf
                     If .PO_HDR_BUYER_ID_Result.ValidationFailed Then _
                         poErrString = poErrString & "|" & "PO_HDR_BUYER_ID: " & .PO_HDR_BUYER_ID_Result.ValidationErrorText & vbCrLf
                     If .PO_HDR_VENDOR_ID_Result.ValidationFailed Then _
@@ -849,16 +900,16 @@ Public Sub Process_PO_eQuote_Q()
                 With PO_CFQs(idxParent).PO_Defaults
                     If .SCH_DUE_DATE_Result.ValidationFailed Then _
                          poErrString = poErrString & "|" & "PO_DUE_DATE: " & .SCH_DUE_DATE_Result.ValidationErrorText & vbCrLf
-                    If .SCH_SHIPTO_ID_Result.ValidationFailed Then _
-                         poErrString = poErrString & "|" & "PO_SHIPTO_ID: " & .SCH_SHIPTO_ID_Result.ValidationErrorText & vbCrLf
-                    If .DIST_BUSINESS_UNIT_PC_Result.ValidationFailed Then _
-                        poErrString = poErrString & "|" & "PO_BUSINESS_UNIT_PC: " & .DIST_BUSINESS_UNIT_PC_Result.ValidationErrorText & vbCrLf
-                    If .DIST_PROJECT_CODE_Result.ValidationFailed Then _
-                        poErrString = poErrString & "|" & "PO_PROJECT_CODE: " & .DIST_PROJECT_CODE_Result.ValidationErrorText & vbCrLf
-                    If .DIST_ACTIVITY_ID_Result.ValidationFailed Then _
-                        poErrString = poErrString & "|" & "PO_ACTIVITY_ID: " & .DIST_ACTIVITY_ID_Result.ValidationErrorText & vbCrLf
-                    If .DIST_LOCATION_ID_Result.ValidationFailed Then _
-                         poErrString = poErrString & "|" & "PO_LOCATION_ID: " & .DIST_LOCATION_ID_Result.ValidationErrorText & vbCrLf
+                    If .DIST_CAP_SHIP_TO_ID_Result.ValidationFailed Then _
+                         poErrString = poErrString & "|" & "PO_SHIPTO_ID: " & .DIST_CAP_SHIP_TO_ID_Result.ValidationErrorText & vbCrLf
+                    If .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed Then _
+                        poErrString = poErrString & "|" & "PO_BUSINESS_UNIT_PC: " & .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationErrorText & vbCrLf
+                    If .DIST_CAP_PROJECT_CODE_Result.ValidationFailed Then _
+                        poErrString = poErrString & "|" & "PO_PROJECT_CODE: " & .DIST_CAP_PROJECT_CODE_Result.ValidationErrorText & vbCrLf
+                    If .DIST_CAP_ACTIVITY_ID_Result.ValidationFailed Then _
+                        poErrString = poErrString & "|" & "PO_ACTIVITY_ID: " & .DIST_CAP_ACTIVITY_ID_Result.ValidationErrorText & vbCrLf
+                    If .DIST_CAP_LOCATION_ID_Result.ValidationFailed Then _
+                         poErrString = poErrString & "|" & "PO_LOCATION_ID: " & .DIST_CAP_LOCATION_ID_Result.ValidationErrorText & vbCrLf
                 End With
             
             
@@ -892,8 +943,8 @@ Public Sub Process_PO_eQuote_Q()
                     queueTableRange.Cells(curRow, C_LINE_ERROR).Value = lineErrString
                     
                     
-                    queueTableRange.Cells(curRow, C_PO_ERROR).WrapText = False
-                    queueTableRange.Cells(curRow, C_LINE_ERROR).WrapText = False
+                    'queueTableRange.Cells(curRow, C_PO_ERROR).WrapText = False
+                    'queueTableRange.Cells(curRow, C_LINE_ERROR).WrapText = False
                     
                 Next idxChild
                 ' -----------------------------------
@@ -902,7 +953,7 @@ Public Sub Process_PO_eQuote_Q()
                 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -916,10 +967,244 @@ Public Sub Process_PO_eQuote_Q()
 
     
 End Sub
+Public Sub Process_PO_eQuote_Queue_RetryBudgetCheck()
+
+    Call Initialize
+    
+
+    Dim i As Integer, j As Integer
+    Dim queueTableRange As Range
+    
+    
+    
+    Set queueTableRange = ThisWorkbook.Worksheets("PO_eQuote_Q").Range("4:65536")
+    Const HEADER_ROWS_SIZE = 0
+    
+ 
+    ' Column numbers (in order)
+    Dim C_QUEUE_ID As Integer
+    Dim C_USER_DATA As Integer
+    Dim C_E_QUOTE_NBR As Integer
+    Dim C_QUOTE_ATTACHMENT As Integer
+    Dim C_PO_BUSINESS_UNIT As Integer
+    Dim C_PO_VENDOR_ID As Integer
+    Dim C_PO_VENDOR_LOCATION As Integer
+    Dim C_PO_BUYER_ID As Integer
+    'Dim C_PO_APPROVER_ID As Integer
+    Dim C_PO_REF As Integer
+    Dim C_PO_COMMENTS As Integer
+    
+    Dim C_PO_DUE_DATE As Integer
+    Dim C_PO_SHIPTO_ID As Integer
+    Dim C_PO_BUSINESS_UNIT_PC As Integer
+    Dim C_PO_PROJECT_CODE As Integer
+    Dim C_PO_ACTIVITY_ID As Integer
+    Dim C_PO_LOCATION_ID As Integer
+    
+    Dim C_PO_LINE As Integer
+    Dim C_PO_LINE_ITEMID As Integer
+    Dim C_PO_LINE_DESC As Integer
+    Dim C_PO_SCH_DUE_DATE As Integer
+    Dim C_PO_SCH_SHIPTO_ID As Integer
+    Dim C_PO_DIST_BUSINESS_UNIT_PC As Integer
+    Dim C_PO_DIST_PC As Integer
+    Dim C_PO_DIST_ACTIVITY_ID As Integer
+    Dim C_PO_DIST_LOCATION_ID As Integer
+    Dim C_PO_NUM As Integer
+    Dim C_PO_AMNT_TOTAL As Integer
+    Dim C_PO_BUDGET_ERR As Integer
+    Dim C_PO_BUDGET_ERR_FUND_REQ As Integer
+    Dim C_PO_ERROR As Integer
+    Dim C_LINE_ERROR As Integer
+    
+    Dim col As Integer
+    col = 0
+    col = col + 1: C_QUEUE_ID = col
+    col = col + 1: C_USER_DATA = col
+    col = col + 1: C_E_QUOTE_NBR = col
+    col = col + 1: C_QUOTE_ATTACHMENT = col
+    col = col + 1: C_PO_BUSINESS_UNIT = col
+    col = col + 1: C_PO_VENDOR_ID = col
+    col = col + 1: C_PO_VENDOR_LOCATION = col
+    col = col + 1: C_PO_BUYER_ID = col
+    'col = col + 1: C_PO_APPROVER_ID = col
+    col = col + 1: C_PO_REF = col
+    col = col + 1: C_PO_COMMENTS = col
+    
+    col = col + 1: C_PO_DUE_DATE = col
+    col = col + 1: C_PO_SHIPTO_ID = col
+    col = col + 1: C_PO_BUSINESS_UNIT_PC = col
+    col = col + 1: C_PO_PROJECT_CODE = col
+    col = col + 1: C_PO_ACTIVITY_ID = col
+    col = col + 1: C_PO_LOCATION_ID = col
+    
+    col = col + 1: C_PO_LINE = col
+    col = col + 1: C_PO_LINE_ITEMID = col
+    col = col + 1: C_PO_LINE_DESC = col
+    col = col + 1: C_PO_SCH_DUE_DATE = col
+    col = col + 1: C_PO_SCH_SHIPTO_ID = col
+    col = col + 1: C_PO_DIST_BUSINESS_UNIT_PC = col
+    col = col + 1: C_PO_DIST_PC = col
+    col = col + 1: C_PO_DIST_ACTIVITY_ID = col
+    col = col + 1: C_PO_DIST_LOCATION_ID = col
+    col = col + 1: C_PO_NUM = col
+    col = col + 1: C_PO_AMNT_TOTAL = col
+    col = col + 1: C_PO_BUDGET_ERR = col
+    col = col + 1: C_PO_BUDGET_ERR_FUND_REQ = col
+    col = col + 1: C_PO_ERROR = col
+    col = col + 1: C_LINE_ERROR = col
+    
+    
+    
+    
+    ' ----------------------------------------------------------------------------
+    ' Begin - Load data from spreadsheet into data structures
+    ' ----------------------------------------------------------------------------
+    ' Primary - PO_QUEUE_ID (Unique per PO)
+    ' Secondary - PO Line #
+    Dim ssMap As SPREADSHEET_MAP_2L
+    Dim idxParent As Integer, idxChild As Integer
+    Dim curRow As Integer
+    
+    ssMap = SpreadsheetTableToMultiLevelMap_2D(queueTableRange, C_QUEUE_ID, C_QUEUE_ID, HEADER_ROWS_SIZE)
+    
+    If ssMap.PARENT_COUNT = 0 Then Exit Sub
+    
+    
+    Dim PO_BCs() As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams
+    Dim PO_BCs_DoNotProcess() As Boolean
+    Dim PO_BCs_DoNotProcessCount As Integer
+    
+    ReDim PO_BCs(1 To ssMap.PARENT_COUNT) As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams
+    ReDim PO_BCs_DoNotProcess(1 To ssMap.PARENT_COUNT) As Boolean
+    
+    ' Default state: do not try to save with budget check
+    PO_BCs_DoNotProcessCount = ssMap.PARENT_COUNT
+    
+    For idxParent = 1 To ssMap.PARENT_COUNT
+        PO_BCs_DoNotProcess(idxParent) = True
+    Next idxParent
+
+    For curRow = 1 + HEADER_ROWS_SIZE To ssMap.ROW_COUNT + HEADER_ROWS_SIZE
+        idxParent = ssMap.MAP_ROW_TO_PARENT(curRow)
+           
+        If idxParent > 0 Then
+            idxChild = ssMap.MAP_ROW_TO_CHILD(curRow)
+            
+            If idxChild = 1 Then
+                PO_BCs(idxParent).PO_BU = queueTableRange.Cells(curRow, C_PO_BUSINESS_UNIT).Value
+                PO_BCs(idxParent).PO_ID = queueTableRange.Cells(curRow, C_PO_NUM).Value
+            End If
+           
+            ' Only re-try saving with budget check if at least on PO Line has text in the PO NUM column,
+            ' and one of the lines has a budget error
+            If PO_BCs_DoNotProcess(idxParent) = True And queueTableRange.Cells(curRow, C_PO_NUM).Value <> "" And queueTableRange.Cells(curRow, C_PO_BUDGET_ERR).Value <> "" Then
+                PO_BCs_DoNotProcess(idxParent) = False
+                PO_BCs_DoNotProcessCount = PO_BCs_DoNotProcessCount - 1
+            End If
+        End If
+    Next curRow
+    ' End - Create PO objects and load from spreadsheet
+    
+    ' ----------------------------------------------------------------------------
+    ' End - Load data from spreadsheet into data structures
+    ' ----------------------------------------------------------------------------
+
+    If PO_BCs_DoNotProcessCount = ssMap.PARENT_COUNT Then
+        MsgBox "No POs in PO eQuote queue has budget check errors.", vbInformation
+        Exit Sub
+    End If
+    
+    
+        
+    Dim user As String, pass As String
+    
+    If Prompt_UserPass(user, pass) = False Then
+        MsgBox "Canceled or empty user/pass given. Quitting"
+        Exit Sub
+    End If
 
 
-Public Sub Process_PO_BudgetCheck_Q()
+    Dim conseqfailCount As Integer
+    
+    Dim session As PeopleSoft_Session
+    Dim result As Boolean
+    
+    
+    
+    session = PeopleSoft_NewSession(user, pass)
+  
+  
 
+    conseqfailCount = 0
+  
+    For idxParent = 1 To ssMap.PARENT_COUNT
+        If PO_BCs_DoNotProcess(idxParent) = False Then
+        
+            result = PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(session, PO_BCs(idxParent))
+            
+            Application.ScreenUpdating = False
+            
+            If result Then
+                conseqfailCount = 0
+                
+            
+                For idxChild = 1 To ssMap.PARENT_MAP(idxParent).CHILD_COUNT
+                    curRow = ssMap.PARENT_MAP(idxParent).MAP_CHILD_TO_ROW(idxChild)
+                    
+                    
+                                       
+                    ' Populate budget error
+                    Dim BC_totalFundReq As Currency
+                    
+                    BC_totalFundReq = 0
+                    
+                    If PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_HasErrors Then
+                        For j = 1 To PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_Errors.BudgetCheck_ProjectErrorCount
+                            If PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_Errors.BudgetCheck_ProjectErrors(j).NOT_COMMIT_AMT > 0 Then
+                                BC_totalFundReq = BC_totalFundReq + PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_Errors.BudgetCheck_ProjectErrors(j).NOT_COMMIT_AMT
+                                
+                                ' Actually funding required would be NOT_COMMIT_AMT - AVAIL_BUDGET_AMT
+                            End If
+                        Next j
+                    End If
+        
+                    
+                    queueTableRange.Cells(curRow, C_PO_BUDGET_ERR).Value = IIf(PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_HasErrors, "Y", "")
+                    queueTableRange.Cells(curRow, C_PO_BUDGET_ERR_FUND_REQ).Value = IIf(PO_BCs(idxParent).BudgetCheck_Result.BudgetCheck_HasErrors, BC_totalFundReq, "")
+                    
+                Next idxChild
+            Else
+            
+                For idxChild = 1 To ssMap.PARENT_MAP(idxParent).CHILD_COUNT
+                    curRow = ssMap.PARENT_MAP(idxParent).MAP_CHILD_TO_ROW(idxChild)
+                    
+                    queueTableRange.Cells(curRow, C_PO_ERROR).Value = "Budget Check Err: " & PO_BCs(idxParent).GlobalError
+                    queueTableRange.Cells(curRow, C_PO_ERROR).WrapText = False
+
+                Next idxChild
+                
+                
+                conseqfailCount = conseqfailCount + 1
+                
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
+            End If
+            
+            
+            Application.ScreenUpdating = True
+            
+        
+        End If
+    Next idxParent
+
+
+
+
+End Sub
+
+Public Sub Process_PO_BudgetCheck_Queue()
+
+    Call Initialize
 
     Dim i As Integer, j As Integer
 
@@ -1063,7 +1348,7 @@ Public Sub Process_PO_BudgetCheck_Q()
 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -1082,6 +1367,7 @@ Public Sub Process_PO_BudgetCheck_Q()
 End Sub
 Public Sub Process_PO_Receipt_Queue()
 
+    Call Initialize
 
 
     Dim queueTableRange As Range
@@ -1331,7 +1617,7 @@ Public Sub Process_PO_Receipt_Queue()
                 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -1375,9 +1661,9 @@ Public Sub Process_PO_Receipt_Queue()
 
 End Sub
 
+Public Sub Process_PO_ChangeOrder_Queue()
 
-Sub Process_PO_ChangeOrder_Queue()
-
+    Call Initialize
     
     Dim i As Integer, j As Integer
     
@@ -1405,11 +1691,8 @@ Sub Process_PO_ChangeOrder_Queue()
     col = 0
     col = col + 1: C_PO_BU = col
     col = col + 1: C_PO_ID = col
+    'col = col + 2: ' Ignore line/Schedule
     col = col + 1: C_PO_DUE_DATE = col
-    
-    col = col + 1: C_PO_LINE = col
-    col = col + 1: C_PO_SCHEDULE = col
-    
     col = col + 1: C_PO_FLG_SEND_TO_VENDOR = col
     col = col + 1: C_CO_REASON = col
     col = col + 1: C_CO_STATUS = col
@@ -1421,11 +1704,11 @@ Sub Process_PO_ChangeOrder_Queue()
     ' ----------------------------------------------------------------------------
     ' Primary - PO_ID
     ' Secondary - N/A
-    Dim ssMap As SPREADSHEET_MAP_2L
+    Dim ssMap As SPREADSHEET_MAP_1L
     Dim idxParent As Integer, idxChild As Integer
     Dim curRow As Integer
     
-    ssMap = SpreadsheetTableToMultiLevelMap_2D(queueTableRange, C_PO_ID, C_PO_ID, HEADER_ROWS_SIZE)
+    ssMap = SpreadsheetTableToMultiLevelMap_1D(queueTableRange, C_PO_ID, C_PO_ID, HEADER_ROWS_SIZE)
     
     If ssMap.PARENT_COUNT = 0 Then Exit Sub
     
@@ -1502,7 +1785,7 @@ Sub Process_PO_ChangeOrder_Queue()
     For idxParent = 1 To ssMap.PARENT_COUNT
         If PO_COs_DoNotProcess(idxParent) = False Then
         
-            result = PeopleSoft_PurchaseOrder_ProcessChangeOrder(session, PO_COs(idxParent))
+            result = PeopleSoft_ChangeOrder_Process(session, PO_COs(idxParent))
             
             Application.ScreenUpdating = False
             
@@ -1519,12 +1802,8 @@ Sub Process_PO_ChangeOrder_Queue()
                 errString = ""
                 
                 With PO_COs(idxParent)
-                    'If .PO_BU_Result.ValidationFailed Then _
-                    '    errString = errString & "|" & "PO_BU: " & .PO_BU_Result.ValidationErrorText & vbCrLf
                     If .PO_DUE_DATE_Result.ValidationFailed Then _
                         errString = errString & "|" & "PO_DUE_DATE: " & .PO_DUE_DATE_Result.ValidationErrorText & vbCrLf
-                    If .PO_HDR_BUYER_ID_Result.ValidationFailed Then _
-                        errString = errString & "|" & "PO_BUYER_ID: " & .PO_HDR_BUYER_ID_Result.ValidationErrorText & vbCrLf
                 End With
             
                 
@@ -1536,7 +1815,7 @@ Sub Process_PO_ChangeOrder_Queue()
                 
                 conseqfailCount = conseqfailCount + 1
                 
-                If conseqfailCount > Q_MAX_CONSECUTIVE_FAILURES Then Exit Sub
+                If conseqfailCount > CONFIG_OPTIONS.Q_MAX_CONSECUTIVE_ERRORS Then Exit Sub
             End If
             
             
@@ -1548,7 +1827,8 @@ Sub Process_PO_ChangeOrder_Queue()
 
 End Sub
 
-Private Function Prompt_UserPass(ByRef user As String, ByRef pass As String) As Boolean
+
+Public Function Prompt_UserPass(ByRef user As String, ByRef pass As String) As Boolean
     
 
 
@@ -1564,5 +1844,4 @@ Private Function Prompt_UserPass(ByRef user As String, ByRef pass As String) As 
     Prompt_UserPass = True
 
 End Function
-
 
