@@ -18,23 +18,37 @@ Option Explicit
 ' Changelog:
 '
 ' 2.11.0
+'   2017-10-03 (joe h)    - PO Change Order: Exits with error if PO defaults nor line item changed (modifyDefault=False and no valid line items)
+'                         - PO Create from Quote: Add Retry Save with Budget Check
+'                         - PO_RetryWithBudget Check: Fixed issue due to new columns
+'                         - PO Create: Fixed issue where PO ID not found page.
+'   2017-10-02 (joe h)    - PeopleSoft_Page_SetValidatedField overrides implicitWait (speeds up entire automation)
+'                         - PO Receipt: Fixed type mismatch when Receipt Price on page is empty ($0 items)
+'                         - PO Create (eQuote): Ignores spaces before/after eQuote # match checked
+'                         - PeopleSoft_Page_SetValidatedField: Checks if element is disabled before setting
+'                         - Converted Qty data types to Currency (fixed-point)
+'                         - PO Create (CutPO): Vendor can be either set using their ID or SHORT NAME
+'                         - PO Create: Removed suggested approver/approver ID from PO Fields (auto-populates)
+'                         - PO Create (CutPO): Fill xPress Bid Field ID
+'                         - PO Create: Expense PO issue now fixed. PO defaults calculated separately for expense chartfields.
+'                         - Added Debug calls to help with debugging
 '   2017-09-26 (joe h)    - PO Creation/Modify: Returns valid activity IDs when provided activity ID is invalid (adds to error message). Now fixed.
 '                         - Added PeopleSoft_Page_ModalWindow_ExtractSearchTableContents: Generic utility function to read search tables in PS prompts (e.g., valid values for specific fields)
 '   2017-09-22 (joe h)    - Major overhaul to Receipt_Create (formerly PurchaseOrder_ProcessReceipt). Page extraction code moved to their own functions
-'                              - Receipt Lines now matched by line/schedule. (No more errors when they are out-of-order)
-'                              - After receipt, has these been checked for accurancy is valid popup is ignored.
-'                              - If valid receipt ID is generated, automatically acknowledges each popup regardless of message
-'                              - Checks for duplicate PO Line/schedules before running (breaks the code)
-'                              - Continues receiving on items even if one line is not receivable. The error is reported in the Receipt Item error
-'                          - PO Creation Updates (CutPO and CreateFromQuote)
-'                              - Quote attachment feature added
-'                              - Excess Available is acknowledged and ignored
-'                              - Create from eQuote PS issues fixed
-'                              - Clicks through warning when due date is selected: Due Date selected is a weekend or a public holiday
-'                              - Save with Budget Check: Increased timeout waiting period
-'                              - Ignores popup if line amount is $0
-'                          - Added PeopleSoft_Page_CheckForPopup. Supercedes SuppressPopup(): Checks for buttons, auto-acknowledges, and checks for expected text
-'    2017-09-20 (joe h)    - PurchaseOrder_ProcessReceipt: Fixed bug: Subscript out of range error (Caused by previous receipt PO having line item count > current PO)
+'                             - Receipt Lines now matched by line/schedule. (No more errors when they are out-of-order)
+'                             - After receipt, has these been checked for accurancy is valid popup is ignored.
+'                             - If valid receipt ID is generated, automatically acknowledges each popup regardless of message
+'                             - Checks for duplicate PO Line/schedules before running (breaks the code)
+'                             - Continues receiving on items even if one line is not receivable. The error is reported in the Receipt Item error
+'                         - PO Creation Updates (CutPO and CreateFromQuote)
+'                             - Quote attachment feature added
+'                             - Excess Available is acknowledged and ignored
+'                             - Create from eQuote PS issues fixed
+'                             - Clicks through warning when due date is selected: Due Date selected is a weekend or a public holiday
+'                             - Save with Budget Check: Increased timeout waiting period
+'                             - Ignores popup if line amount is $0
+'                         - Added PeopleSoft_Page_CheckForPopup. Supercedes SuppressPopup(): Checks for buttons, auto-acknowledges, and checks for expected text
+'   2017-09-20 (joe h)    - PurchaseOrder_ProcessReceipt: Fixed bug: Subscript out of range error (Caused by previous receipt PO having line item count > current PO)
 '
 ' 2.10.2
 '               (joe h)    - PurchaseOrder_ProcessReceipt - If a valid receipt ID is created, automatically ackowledges each popup regardless of the message.
@@ -106,7 +120,7 @@ End Enum
 
 Type PeopleSoft_Page_PopupCheckResult
     HasPopup As Boolean
-    PopupText As String
+    popupText As String
     PopupElementID As String
     IsExpected As Boolean
     HasButtonOk As Boolean
@@ -126,11 +140,13 @@ Type PeopleSoft_PurchaseOrder_Fields
     PO_HDR_VENDOR_ID As Long
     PO_HDR_VENDOR_LOCATION As String
     PO_HDR_BUYER_ID As Long
-    PO_HDR_APPROVER_ID As Long
+    'PO_HDR_APPROVER_ID As Long
     
     PO_HDR_PO_REF As String  ' NOTE: MAX LENGTH: 30 CHARS
     PO_HDR_COMMENTS As String
     PO_HDR_QUOTE As String
+    
+    PO_HDR_XPRESS_BID_ID As String
     
     Quote_Attachment_FilePath As String
     
@@ -140,7 +156,7 @@ Type PeopleSoft_PurchaseOrder_Fields
     PO_HDR_VENDOR_ID_Result As PeopleSoft_Field_ValidationResult
     PO_HDR_VENDOR_LOCATION_Result As PeopleSoft_Field_ValidationResult
     PO_HDR_BUYER_ID_Result As PeopleSoft_Field_ValidationResult
-    PO_HDR_APPROVER_ID_Result As PeopleSoft_Field_ValidationResult
+    'PO_HDR_APPROVER_ID_Result As PeopleSoft_Field_ValidationResult
     
     Quote_Attachment_FilePath_Result As PeopleSoft_Field_ValidationResult
     
@@ -159,7 +175,7 @@ Type PeopleSoft_PurchaseOrder_Schedule_Fields
     ' PSoft Fields
     DUE_DATE As Date
     SHIPTO_ID As Long
-    QTY As Variant ' Decimal Data Type - We must use a fixed point data type here
+    QTY As Currency ' Use Currency as we must use a fixed point data type here
     PRICE As Currency
     
     
@@ -178,20 +194,32 @@ Type PeopleSoft_PurchaseOrder_PO_Defaults
     HasValidationError As Boolean
 
     SCH_DUE_DATE As Date
-    SCH_SHIPTO_ID As Long
     
-    DIST_BUSINESS_UNIT_PC As String
-    DIST_PROJECT_CODE As String
-    DIST_ACTIVITY_ID As String
-    DIST_LOCATION_ID As Long
+    DIST_CAP_BUSINESS_UNIT_PC As String
+    DIST_CAP_PROJECT_CODE As String
+    DIST_CAP_ACTIVITY_ID As String
+    DIST_CAP_SHIP_TO_ID As Long
+    DIST_CAP_LOCATION_ID As Long
+    
+    DIST_EXP_BUSINESS_UNIT_PC As String
+    DIST_EXP_PROJECT_CODE As String
+    DIST_EXP_ACTIVITY_ID As String
+    DIST_EXP_SHIP_TO_ID As Long
+    DIST_EXP_LOCATION_ID As Long
     
     SCH_DUE_DATE_Result As PeopleSoft_Field_ValidationResult
-    SCH_SHIPTO_ID_Result As PeopleSoft_Field_ValidationResult
     
-    DIST_BUSINESS_UNIT_PC_Result As PeopleSoft_Field_ValidationResult
-    DIST_PROJECT_CODE_Result As PeopleSoft_Field_ValidationResult
-    DIST_ACTIVITY_ID_Result As PeopleSoft_Field_ValidationResult
-    DIST_LOCATION_ID_Result As PeopleSoft_Field_ValidationResult
+    DIST_CAP_BUSINESS_UNIT_PC_Result As PeopleSoft_Field_ValidationResult
+    DIST_CAP_PROJECT_CODE_Result As PeopleSoft_Field_ValidationResult
+    DIST_CAP_ACTIVITY_ID_Result As PeopleSoft_Field_ValidationResult
+    DIST_CAP_SHIP_TO_ID_Result As PeopleSoft_Field_ValidationResult
+    DIST_CAP_LOCATION_ID_Result As PeopleSoft_Field_ValidationResult
+    
+    DIST_EXP_BUSINESS_UNIT_PC_Result As PeopleSoft_Field_ValidationResult
+    DIST_EXP_PROJECT_CODE_Result As PeopleSoft_Field_ValidationResult
+    DIST_EXP_ACTIVITY_ID_Result As PeopleSoft_Field_ValidationResult
+    DIST_EXP_SHIP_TO_ID_Result As PeopleSoft_Field_ValidationResult
+    DIST_EXP_LOCATION_ID_Result As PeopleSoft_Field_ValidationResult
 End Type
 
 
@@ -371,10 +399,10 @@ Type PeopleSoft_PurchaseOrder_ChangeOrder
     PO_PROJECT_CODE_Result As PeopleSoft_Field_ValidationResult
     
     ' PO Fields
-    PO_HDR_BUYER_ID As Long
-    PO_HDR_BUYER_ID_Result As PeopleSoft_Field_ValidationResult
+    'PO_HDR_BUYER_ID As Long
+    'PO_HDR_BUYER_ID_Result As PeopleSoft_Field_ValidationResult
     
-    PO_HDR_PO_REF As String
+    'PO_HDR_PO_REF As String
     
     PO_HDR_FLG_SEND_TO_VENDOR As PeopleSoft_Page_CheckboxAction
     
@@ -410,8 +438,8 @@ Type PeopleSoft_Receipt_Item
     Item_ID As String
     TRANS_ITEM_DESC As String
     
-    Receive_Qty As Variant ' Decimal type
-    Accept_Qty As Variant ' Decimal type
+    Receive_Qty As Currency ' Currenty type: Need to use fixed point type for accuracy.
+    Accept_Qty As Currency
     
     IsNotReceivable As Boolean ' Returns True if not receivable (receive checkbox is greyed out)
     HasError As Boolean
@@ -441,7 +469,7 @@ Private Type PeopleSoft_ReceiptPage_UnreceivedItem
     PO_ID As String
     PO_Line As Long
     PO_Schedule As Long
-    PO_Qty As Double
+    PO_Qty As Currency ' Fixed-point data type
     PO_Item_ID As String
     CATS_FLAG As String
     
@@ -459,9 +487,9 @@ Private Type PeopleSoft_ReceiptPage_ReceiptLine
     Description As String
     
     
-    Receipt_Qty As Variant ' Decimal type
-    Accept_Qty As Variant ' Decimal type
-    Receipt_Price As Variant ' Decimal type
+    Receipt_Qty As Currency ' Fixed-point data type (high accuracy)
+    Accept_Qty As Currency ' Fixed-point data type (high accuracy)
+    Receipt_Price As Currency ' Fixed-point data type (high accuracy)
     
     Status As String
     
@@ -494,16 +522,23 @@ Private Const PS_URI_LOGIN As String = "https://websso.vzwcorp.com/siteminderage
 Private Const PS_URI_PO_EXPRESS As String = "https://erpprd-fnprd.erp.vzwcorp.com/psc/ps/EMPLOYEE/ERP/c/MANAGE_PURCHASE_ORDERS.PURCHASE_ORDER_EXP.GBL"
 Private Const PS_URI_RECEIPT_ADD As String = "https://erpprd-fnprd.erp.vzwcorp.com/psc/ps/EMPLOYEE/ERP/c/MANAGE_SHIPMENTS.RECV_PO.GBL"
 
-Private Const TIMEOUT_LONG = 60 * 3 ' 3min
-Private Const TIMEOUT_IMPLICIT_WAIT = 3000 '3s
+Private Const TIMEOUT_LONG = 60 * 5 ' 5min (seconds)
+Private Const TIMEOUT_IMPLICIT_WAIT = 3000 ' 3 seconds (milliseconds)
 
 ' ------------------------------------------------
 ' Debug Stuff
 ' ------------------------------------------------
 Private Type PeopleSoft_Debug_Options
+    InitFlag As Boolean
+
     CaptureExceptions As Boolean
-    AddFunctionNameToExceptions As Boolean
-    TakeScreenshotsAfterException As Boolean
+    AddMethodNamePrefixToExceptions As Boolean
+    
+    QuitBeforeSaving As Boolean
+    
+    SaveDebugInfo_WriteDebugOutputToFile As Boolean
+    SaveDebugInfo_WriteSrcToFile As Boolean
+    SaveDebugInfo_TakeScreenShot As Boolean
 End Type
 
 Private DEBUG_OPTIONS As PeopleSoft_Debug_Options
@@ -517,18 +552,41 @@ Public Function GetSeleniumVersion() As String
     
 
 End Function
+Public Sub PeopleSoft_SetConfigOptions(Optional captureExceptionsAsError As Boolean = False, Optional addMethodNamesToExceptions As Boolean = False, _
+    Optional writeDebugOutputToFile As Boolean = False, Optional writePageSrcToFile As Boolean = False, Optional takeScreenShot As Boolean = False)
+    
+   
+    DEBUG_OPTIONS.InitFlag = True
+
+    DEBUG_OPTIONS.CaptureExceptions = captureExceptionsAsError
+    DEBUG_OPTIONS.AddMethodNamePrefixToExceptions = addMethodNamesToExceptions
+    
+    DEBUG_OPTIONS.SaveDebugInfo_WriteDebugOutputToFile = writeDebugOutputToFile
+    DEBUG_OPTIONS.SaveDebugInfo_WriteSrcToFile = writePageSrcToFile
+    DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot = takeScreenShot
+
+End Sub
 Private Sub PeopleSoft_SaveDebugInfo(driver As SeleniumWrapper.WebDriver, Optional prefix As String)
 
+    Dim dirPath As String
     Dim fileNamePrefix As String, fileHandle As Long
     
-    fileNamePrefix = ThisWorkbook.Path & "\" & IIf(prefix <> "", prefix & "_", "") & "PS_" & Format$(Now(), "YYYYmmddHhmmSs")
-    driver.captureEntirePageScreenshot fileNamePrefix & "_SS.png"
-
-    fileHandle = FreeFile
+    dirPath = ThisWorkbook.Path & "\"
+    fileNamePrefix = dirPath & IIf(prefix <> "", prefix & "_", "") & "PS_" & Format$(Now(), "YYYYmmddHhmmSs")
     
-    Open fileNamePrefix & "_src.html" For Output As #fileHandle
-        Write #fileHandle, driver.PageSource
-    Close #fileHandle
+    Debug_Print "PeopleSoft_SaveDebugInfo: Generating debug info files with prefix: " & fileNamePrefix
+    
+    If DEBUG_OPTIONS.SaveDebugInfo_WriteSrcToFile Then
+        fileHandle = FreeFile
+        
+        Open fileNamePrefix & "_src.html" For Output As #fileHandle
+            Write #fileHandle, driver.PageSource
+        Close #fileHandle
+    End If
+    
+    If DEBUG_OPTIONS.SaveDebugInfo_WriteDebugOutputToFile Then Debug_ToFile (fileNamePrefix & "_debug.txt")
+    
+    If DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot Then driver.captureEntirePageScreenshot fileNamePrefix & "_SS.png"
 
 End Sub
 
@@ -536,16 +594,39 @@ End Sub
 ' -----------------------------------------------------------------------------------------------
 Public Function PeopleSoft_NewSession(user As String, pass As String) As PeopleSoft_Session
 
+
+    
+    Debug_Init reset:=True
+    
+    Debug_Print "PeopleSoft_NewSession called"
+    
     Dim session As PeopleSoft_Session
     Dim driver As New SeleniumWrapper.WebDriver
     
-    ' Setup global debug options
-    DEBUG_OPTIONS.CaptureExceptions = True
-    DEBUG_OPTIONS.AddFunctionNameToExceptions = False
+    
+   
+    If DEBUG_OPTIONS.InitFlag = False Then PeopleSoft_SetConfigOptions
+    
+    'If True Then
+    '    ' Setup global debug options: DEBUG MODE
+    '    DEBUG_OPTIONS.CaptureExceptions = False
+    '    DEBUG_OPTIONS.AddMethodNamePrefixToExceptions = False
+    '
+    '    DEBUG_OPTIONS.SaveDebugInfo_WriteDebugOutputToFile = True
+    '    DEBUG_OPTIONS.SaveDebugInfo_WriteSrcToFile = True
+    '    DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot = True
+    'Else
+    '    ' Setup global debug options: PRODUCTION MODE
+    '    DEBUG_OPTIONS.CaptureExceptions = True
+    '    DEBUG_OPTIONS.AddMethodNamePrefixToExceptions = True
+    '
+    '    DEBUG_OPTIONS.SaveDebugInfo_WriteDebugOutputToFile = True
+    '    DEBUG_OPTIONS.SaveDebugInfo_WriteSrcToFile = True
+    '    DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot = True
+    'End If
     
     
     Set session.driver = driver
-    
     
     
     session.user = user
@@ -558,6 +639,9 @@ End Function
 
 
 Public Function PeopleSoft_Login(ByRef session As PeopleSoft_Session) As Boolean
+    
+    Debug_Print "PeopleSoft_Login: called"
+    
     
     On Error GoTo ExceptionThrown
     
@@ -592,9 +676,13 @@ Public Function PeopleSoft_Login(ByRef session As PeopleSoft_Session) As Boolean
         errBoxExists = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[starts-with(@id,'ErrorBox')]//p/b"))
         
         If errBoxExists Then
-            errMsg = driver.findElementByXPath(".//*[starts-with(@id,'ErrorBox')]//p/b").Text
+            errMsg = driver.findElementByXPath(".//*[starts-with(@id,'ErrorBox')]//p/b").text
                     
+            
+            Debug_Print "PeopleSoft_Login: failed: " & errMsg
             session.LogonError = "PeopleSoft Login Failed: " & errMsg
+            PeopleSoft_Login = False
+            Exit Function
         End If
     
         
@@ -605,7 +693,7 @@ Public Function PeopleSoft_Login(ByRef session As PeopleSoft_Session) As Boolean
     Exit Function
   
 ExceptionThrown:
-    session.LogonError = "Exception: " & Err.Description
+    session.LogonError = "PeopleSoft_Login Exception: " & Err.Description
     
     PeopleSoft_Login = False
 
@@ -613,8 +701,9 @@ End Function
 
 Public Function PeopleSoft_NavigateTo_AddPO(ByRef session As PeopleSoft_Session, PO_BU As String, ByRef PO_BU_Result As PeopleSoft_Field_ValidationResult) As Boolean
 
+    Debug_Print "PeopleSoft_NavigateTo_AddPO called"
     
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
 
 
     Dim driver As SeleniumWrapper.WebDriver
@@ -653,9 +742,12 @@ ExceptionThrown:
     Err.Raise Err.Number, Err.Source, "PeopleSoft_NavigateTo_AddPO Exception: " & Err.Description, Err.Helpfile, Err.HelpContext
 
 End Function
-Public Sub PeopleSoft_NavigateTo_ExistingPO(ByRef session As PeopleSoft_Session, PO_BU As String, PO_ID As String)
+Public Function PeopleSoft_NavigateTo_ExistingPO(ByRef session As PeopleSoft_Session, PO_BU As String, PO_ID As String) As Boolean
     
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    
+    Debug_Print "PeopleSoft_NavigateTo_ExistingPO called (" & Debug_VarListString("PO BU", PO_BU, "PO ID", PO_ID) & ")"
+    
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
     
     Dim By As New By, Assert As New Assert, Verify As New Verify
@@ -667,6 +759,13 @@ Public Sub PeopleSoft_NavigateTo_ExistingPO(ByRef session As PeopleSoft_Session,
     
     
     driver.get PS_URI_PO_EXPRESS
+    
+    
+    ' TODO: How to deal with the below error message
+    ' <p class="psloginmessagelarge">We are not able to process your request at this time. Please close your web browser and try your request again. If this problem continues, please contact the ITSC
+    '      and provide them with the details of what you were attempting to do when this problem occurred, along with any other details needed to
+    '      reproduce this issue.</p>
+    
     
     'driver.waitForElementPresent "css=#RECV_PO_ADD_BUSINESS_UNIT"
     
@@ -693,31 +792,55 @@ Public Sub PeopleSoft_NavigateTo_ExistingPO(ByRef session As PeopleSoft_Session,
     
     
     driver.findElementById("PO_SRCH_PO_ID").SendKeys PO_ID
-    
-    'PeopleSoft_Page_TypeCalculatedField(driver, fieldElement, fieldValue)
     driver.findElementById("PO_SRCH_OPRID_ENTERED_BY").Clear
     
     
     
     driver.findElementById("#ICSearch").Click
     'driver.runScript "javascript:submitAction_win0(document.win0, '#ICSearch');"
+    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+
+    
+    If PeopleSoft_Page_ElementExists(driver, By.id("PO_PNLS_PB_PAGE_TITLE_PO")) = False Then
+        Debug_Print "PeopleSoft_NavigateTo_ExistingPO: PO page not found"
+        PeopleSoft_NavigateTo_ExistingPO = False
+        Exit Function
+    End If
     
     
-    PeopleSoft_Page_WaitForProcessing driver, 120
+    Debug_Print "PeopleSoft_NavigateTo_ExistingPO: PO page found!"
     
-    
-    Exit Sub
+
+    PeopleSoft_NavigateTo_ExistingPO = True
+    Exit Function
     
     
 ExceptionThrown:
+    PeopleSoft_NavigateTo_ExistingPO = False
     Err.Raise Err.Number, Err.Source, "PeopleSoft_NavigateTo_ExistingPO Exception: " & Err.Description, Err.Helpfile, Err.HelpContext
     
     
-End Sub
+End Function
 Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Session, ByRef purchaseOrder As PeopleSoft_PurchaseOrder) As Boolean
+
+
+    Debug_Print "PeopleSoft_PurchaseOrder_CutPO called (" & Debug_VarListString("PO Ref", purchaseOrder.PO_Fields.PO_HDR_PO_REF) & ")"
+    
 
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
 
+
+    ' Begin - Precheck
+    If purchaseOrder.PO_LineCount < 1 Then
+        purchaseOrder.GlobalError = "PeopleSoft_PurchaseOrder_CutPO: One or more PO lines must be specified"
+        purchaseOrder.HasError = True
+    End If
+    
+    If purchaseOrder.HasError = True Then
+        PeopleSoft_PurchaseOrder_CutPO = False
+        Exit Function
+    End If
+    ' End - Precheck
 
     Dim driver As SeleniumWrapper.WebDriver
 
@@ -742,48 +865,61 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
 
     
     Call PeopleSoft_NavigateTo_AddPO(session, purchaseOrder.PO_Fields.PO_BUSINESS_UNIT, purchaseOrder.PO_Fields.PO_BUSINESS_UNIT_Result)
-    
     If purchaseOrder.PO_Fields.PO_BUSINESS_UNIT_Result.ValidationFailed Then GoTo ValidationFail
     
     
-    
-    PeopleSoft_Page_SetValidatedField driver, ("VENDOR_VENDOR_NAME_SHORT"), _
-        purchaseOrder.PO_Fields.VENDOR_NAME_SHORT, purchaseOrder.PO_Fields.VENDOR_NAME_SHORT_Result
-        
-    If purchaseOrder.PO_Fields.VENDOR_NAME_SHORT_Result.ValidationFailed Then GoTo ValidationFail
-    
-    'TODO: PeopleSoft_Page_TypeCalculatedField driver, driver.findElementById("PO_HDR_VENDOR_ID$73$"), "0000000435"
-    
-    
-    Dim vendorLocationText As String
-    
-    vendorLocationText = driver.findElementById("Z_VNDR_PNLS_WRK_VNDR_LOC").getAttribute("value")
-    
-    If vendorLocationText = "" Then
-    
-        If Len(purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION) > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("Z_VNDR_PNLS_WRK_VNDR_LOC"), _
-                purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION, purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result
-                
-        Else
-            purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationFailed = True
-            purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationErrorText = "Vendor location is required"
-        End If
-        
-        
-        If purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationFailed Then GoTo ValidationFail
+    If purchaseOrder.PO_Fields.PO_HDR_VENDOR_ID > 0 Then
+        ' If vendor ID provided: use vendor ID.
+        Dim weID As String
+        weID = driver.findElementByXPath(".//input[starts-with(@id,'PO_HDR_VENDOR_ID')]").getAttribute("id")
+        PeopleSoft_Page_SetValidatedField driver, (weID), Format(purchaseOrder.PO_Fields.PO_HDR_VENDOR_ID, "0000000000"), purchaseOrder.PO_Fields.PO_HDR_VENDOR_ID_Result
+        If purchaseOrder.PO_Fields.PO_HDR_VENDOR_ID_Result.ValidationFailed Then GoTo ValidationFail
+    Else
+        ' Otherwise: use vendor name short
+        PeopleSoft_Page_SetValidatedField driver, ("VENDOR_VENDOR_NAME_SHORT"), purchaseOrder.PO_Fields.VENDOR_NAME_SHORT, purchaseOrder.PO_Fields.VENDOR_NAME_SHORT_Result
+        If purchaseOrder.PO_Fields.VENDOR_NAME_SHORT_Result.ValidationFailed Then GoTo ValidationFail
     End If
     
     
+    ' Vendor location
+    If Len(purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION) > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("Z_VNDR_PNLS_WRK_VNDR_LOC"), _
+            purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION, purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result
+        If purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationFailed Then GoTo ValidationFail
+    Else
+        ' If vendor location not provided: check if it has a valid value. If not, then we cannot continue
+        Dim vendorLocationText As String
+        vendorLocationText = driver.findElementById("Z_VNDR_PNLS_WRK_VNDR_LOC").getAttribute("value")
+        
+        If vendorLocationText = "" Then
+            purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationFailed = True
+            purchaseOrder.PO_Fields.PO_HDR_VENDOR_LOCATION_Result.ValidationErrorText = "Vendor location is required for this vendor"
+            GoTo ValidationFail
+        End If
+    End If
+    
+
+    
+    ' Buyer ID
     PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_BUYER_ID"), _
         CStr(purchaseOrder.PO_Fields.PO_HDR_BUYER_ID), purchaseOrder.PO_Fields.PO_HDR_BUYER_ID_Result
         
     If purchaseOrder.PO_Fields.PO_HDR_BUYER_ID_Result.ValidationFailed Then GoTo ValidationFail
     
-    
+    ' PO Reference
     If Len(purchaseOrder.PO_Fields.PO_HDR_PO_REF) > 0 Then
         driver.findElementById("PO_HDR_PO_REF").Clear
         driver.findElementById("PO_HDR_PO_REF").SendKeys purchaseOrder.PO_Fields.PO_HDR_PO_REF
+    End If
+    
+    
+    If Len(purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID) > 0 Then
+        'driver.findElementById("PO_HDR_Z_XPRESS_BID_ID").Clear
+        'driver.findElementById("PO_HDR_Z_XPRESS_BID_ID").SendKeys purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID
+        
+        Dim validationResult As PeopleSoft_Field_ValidationResult
+        PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_Z_XPRESS_BID_ID"), CStr(purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID), validationResult
+        ' Note: we ignore validationResult since the field is not actually validated field by PS
     End If
     
     
@@ -792,16 +928,14 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     ' Begin - Header Section
     ' -------------------------------------------------------------------
     If Len(purchaseOrder.PO_Fields.PO_HDR_QUOTE) > 0 Then
+        Debug_Print "PeopleSoft_PurchaseOrder_CutPO: Navigating to PO header page"
+        
         ' Only if quote field provided
     
         driver.findElementById("PO_PNLS_WRK_GOTO_HDR_DTL").Click
-        'javascript:hAction_win0(document.win0,'PO_PNLS_WRK_GOTO_HDR_DTL', 0, 0, 'Header Details', false, true);
-        
-        'driver.waitForPageToLoad 5000
          PeopleSoft_Page_WaitForProcessing driver
         
         driver.waitForElementPresent "css=#PO_HDR_Z_QUOTE_NBR"
-        
         
         driver.findElementById("PO_HDR_Z_QUOTE_NBR").Clear
         driver.findElementById("PO_HDR_Z_QUOTE_NBR").SendKeys purchaseOrder.PO_Fields.PO_HDR_QUOTE
@@ -822,43 +956,7 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     fillResult = PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver, purchaseOrder.PO_Fields)
     If Not fillResult Then GoTo ValidationFail ' TODO: Add .HasValidationError calculation
     
-    ' -------------------------------------------------------------------
-    ' Begin - Comments Section
-    ' -------------------------------------------------------------------
-    'If Len(purchaseOrder.PO_Fields.PO_HDR_COMMENTS) > 0 Then ' Only go into comments section if commend is given
-    '    driver.findElementById("COMM_WRK1_COMMENTS_PB").Click
-    '    'driver.runScript "javascript:hAction_win0(document.win0,'COMM_WRK1_COMMENTS1_PB', 0, 0, 'Edit Comments', false, true);"
-    '
-    '    'driver.waitForPageToLoad 5000
-    '    PeopleSoft_Page_WaitForProcessing driver
-    '
-    '    If False Then ' No more suggested approver
-    '        driver.waitForElementPresent "css=#PO_HDR_Z_SUG_APPRVR"
-    '
-    '
-    '        PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_Z_SUG_APPRVR"), _
-    '            CStr(purchaseOrder.PO_Fields.PO_HDR_APPROVER_ID), purchaseOrder.PO_Fields.PO_HDR_APPROVER_ID_Result
-    '
-    '        If purchaseOrder.PO_Fields.PO_HDR_APPROVER_ID_Result.ValidationFailed Then GoTo ValidationFail
-    '    End If
-    '
-    '    If Len(purchaseOrder.PO_Fields.PO_HDR_COMMENTS) > 0 Then
-    '        driver.findElementById("COMM_WRK1_COMMENTS_2000$0").Clear
-    '        driver.findElementById("COMM_WRK1_COMMENTS_2000$0").SendKeys purchaseOrder.PO_Fields.PO_HDR_COMMENTS
-    '    End If
-    '
-    '    PeopleSoft_Page_WaitForProcessing driver
-    '
-   '
-   '     driver.findElementById("#ICSave").Click
-   '     'driver.runScript "javascript:submitAction_win0(document.win0, '#ICSave');" ' work-around - Clicks 'Save'
-   '
-   '     PeopleSoft_Page_WaitForProcessing driver
-   '
-   ' End If
-    ' -------------------------------------------------------------------
-    ' End - Comments Section
-    ' -------------------------------------------------------------------
+
     
     Dim PO_Line As Integer
     Dim PO_LineCount As Integer
@@ -866,35 +964,59 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     Dim PO_pageScheduleIndex As Integer
     Dim PO_Line_Schedule As Integer
     
+    Dim isExpenseLine As Boolean, lineItemID As String
     
-    ' Calculate and fill defaults if the PO has more than one line
+    ' -------------------------------------------------------------------
+    ' Begin - Calculate and fill defaults if the PO has more than one line
+    ' -------------------------------------------------------------------
     If purchaseOrder.PO_LineCount > 1 Then
         purchaseOrder.PO_Defaults = PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder)
         PeopleSoft_PurchaseOrder_PO_Defaults_Fill driver, purchaseOrder.PO_Defaults
         
-        ' Begin - Transfer validation errors from defaults to each line/schedule
+        ' Begin - Transfer validation errors from defaults to each corresponding line/schedule
         If purchaseOrder.PO_Defaults.HasValidationError Then
             For PO_Line = 1 To purchaseOrder.PO_LineCount
+                ' Determine if expense line
+                isExpenseLine = False
+                lineItemID = UCase$(purchaseOrder.PO_Lines(PO_Line).LineFields.PO_LINE_ITEM_ID)
+                If lineItemID Like "EXP-*" Or lineItemID Like "CR-EXP-*" Then isExpenseLine = True
+            
                 For PO_Line_Schedule = 1 To purchaseOrder.PO_Lines(PO_Line).ScheduleCount
                 
+                    ' Transfer Validation Results to defaults to each line/schedule
                     With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule)
                         .ScheduleFields.DUE_DATE_Result = purchaseOrder.PO_Defaults.SCH_DUE_DATE_Result
-                        .ScheduleFields.SHIPTO_ID_Result = purchaseOrder.PO_Defaults.SCH_SHIPTO_ID_Result
                         
-                        .DistributionFields.BUSINESS_UNIT_PC_Result = purchaseOrder.PO_Defaults.DIST_BUSINESS_UNIT_PC_Result
-                        .DistributionFields.PROJECT_CODE_Result = purchaseOrder.PO_Defaults.DIST_PROJECT_CODE_Result
-                        .DistributionFields.ACTIVITY_ID_Result = purchaseOrder.PO_Defaults.DIST_ACTIVITY_ID_Result
-                        .DistributionFields.LOCATION_ID_Result = purchaseOrder.PO_Defaults.DIST_LOCATION_ID_Result
+                        If isExpenseLine Then
+                            .DistributionFields.BUSINESS_UNIT_PC_Result = purchaseOrder.PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC_Result
+                            .DistributionFields.PROJECT_CODE_Result = purchaseOrder.PO_Defaults.DIST_EXP_PROJECT_CODE_Result
+                            .DistributionFields.ACTIVITY_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_ACTIVITY_ID_Result
+                            .ScheduleFields.SHIPTO_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_SHIP_TO_ID_Result
+                            .DistributionFields.LOCATION_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_LOCATION_ID_Result
+                        Else
+                            .DistributionFields.BUSINESS_UNIT_PC_Result = purchaseOrder.PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC_Result
+                            .DistributionFields.PROJECT_CODE_Result = purchaseOrder.PO_Defaults.DIST_CAP_PROJECT_CODE_Result
+                            .DistributionFields.ACTIVITY_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_ACTIVITY_ID_Result
+                            .ScheduleFields.SHIPTO_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_SHIP_TO_ID_Result
+                            .DistributionFields.LOCATION_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_LOCATION_ID_Result
+                        End If
                     End With
                     
+                    ' Set line validation error
                     With purchaseOrder.PO_Defaults
-                        purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
-                            Or .SCH_DUE_DATE_Result.ValidationFailed _
-                            Or .SCH_SHIPTO_ID_Result.ValidationFailed _
-                            Or .DIST_BUSINESS_UNIT_PC_Result.ValidationFailed _
-                            Or .DIST_PROJECT_CODE_Result.ValidationFailed _
-                            Or .DIST_ACTIVITY_ID_Result.ValidationFailed _
-                            Or .DIST_LOCATION_ID_Result.ValidationFailed
+                        If isExpenseLine Then
+                            purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
+                                Or .SCH_DUE_DATE_Result.ValidationFailed _
+                                Or .DIST_EXP_BUSINESS_UNIT_PC_Result.ValidationFailed Or .DIST_EXP_PROJECT_CODE_Result.ValidationFailed _
+                                Or .DIST_EXP_ACTIVITY_ID_Result.ValidationFailed Or .DIST_EXP_SHIP_TO_ID_Result.ValidationFailed _
+                                Or .DIST_EXP_LOCATION_ID_Result.ValidationFailed
+                        Else
+                            purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
+                                Or .SCH_DUE_DATE_Result.ValidationFailed _
+                                Or .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed Or .DIST_CAP_PROJECT_CODE_Result.ValidationFailed _
+                                Or .DIST_CAP_ACTIVITY_ID_Result.ValidationFailed Or .DIST_CAP_SHIP_TO_ID_Result.ValidationFailed _
+                                Or .DIST_CAP_LOCATION_ID_Result.ValidationFailed
+                        End If
                     End With
                     
                 Next PO_Line_Schedule
@@ -902,15 +1024,18 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
             
              GoTo ValidationFail
         End If
-        ' End - Transfer validation errors from defaults to each line/schedule
+        ' End - Transfer validation errors from defaults to each corresponding line/schedule
     
         
     End If
+    ' -------------------------------------------------------------------
+    ' End - Calculate and fill defaults if the PO has more than one line
+    ' -------------------------------------------------------------------
     
     ' -------------------------------------------------------------------
     ' Begin - Add individual lines to PO
     ' -------------------------------------------------------------------
-    
+    Debug_Print "PeopleSoft_PurchaseOrder_CutPO: Begin PO Line/Schedule Adds (" & Debug_VarListString("Line Count", purchaseOrder.PO_LineCount) & ")"
     
     
     PO_Line = 1
@@ -966,7 +1091,9 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     'anyLineHasValidationError = False
     
     For PO_Line = 1 To PO_LineCount
-        'Debug.Print "Line: " & PO_line
+        Debug_Print "PeopleSoft_PurchaseOrder_CutPO: Processing Line #" & PO_Line & " (" & _
+                Debug_VarListString("Item ID", purchaseOrder.PO_Lines(PO_Line).LineFields.PO_LINE_ITEM_ID) & ")"
+   
         
         PeopleSoft_PurchaseOrder_Fill_PO_Line driver, purchaseOrder, PO_Line, PO_pageScheduleIndex
         If purchaseOrder.HasError Then GoTo ValidationFail
@@ -984,7 +1111,6 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
        
     driver.runScript "javascript:submitAction_win0(document.win0,'CALCULATE_TAXES');" ' Fix for 2.9.1.1  due to PS upgrade
     'driver.findElementById("CALCULATE_TAXES").Click
-    'driver.runScript "javascript:hAction_win0(document.win0,'CALCULATE_TAXES', 0, 0, 'Calculate', false, true);"
     
     PeopleSoft_Page_WaitForProcessing driver
 
@@ -992,22 +1118,27 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     Dim amntStr As String
     
     ' Total
-    amntStr = driver.findElementById("PO_PNLS_WRK_PO_AMT_TTL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_PO_AMT_TTL").text
     purchaseOrder.PO_AMNT_TOTAL = CurrencyFromString(amntStr)
     
     ' Total w/o Taxes, Freight and Misc
-    amntStr = driver.findElementById("PO_PNLS_WRK_MERCH_AMT_TTL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_MERCH_AMT_TTL").text
     purchaseOrder.PO_AMNT_MERCH_TOTAL = CurrencyFromString(amntStr)
     
     ' Taxes, Freight and Misc
-    amntStr = driver.findElementById("PO_PNLS_WRK_ADJ_AMT_TTL_LBL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_ADJ_AMT_TTL_LBL").text
     purchaseOrder.PO_AMNT_FTM_TOTAL = CurrencyFromString(amntStr)
+    
     
     
     
     Dim result As Boolean
     
     result = PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver, purchaseOrder.BudgetCheck_Result)
+    
+    purchaseOrder.PO_ID = purchaseOrder.BudgetCheck_Result.PO_ID
+    
+    
     
     If result = False Then
         purchaseOrder.GlobalError = purchaseOrder.BudgetCheck_Result.GlobalError
@@ -1017,17 +1148,20 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
         Exit Function
     End If
     
-    purchaseOrder.PO_ID = purchaseOrder.BudgetCheck_Result.PO_ID
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CutPO: complete (" & Debug_VarListString("PO ID", purchaseOrder.PO_ID) & ")"
     
     PeopleSoft_PurchaseOrder_CutPO = True
     Exit Function
     
     
 ValidationFail:
+    PeopleSoft_SaveDebugInfo driver, "CutPO"
     PeopleSoft_PurchaseOrder_CutPO = False
     Exit Function
     
 ExceptionThrown:
+    PeopleSoft_SaveDebugInfo driver, "CutPO"
     purchaseOrder.HasError = True
     purchaseOrder.GlobalError = "Exception: " & Err.Description
     
@@ -1037,11 +1171,12 @@ ExceptionThrown:
 End Function
 Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As PeopleSoft_Session, ByRef poCFQ As PeopleSoft_PurchaseOrder_CreateFromQuoteParams) As Boolean
 
+    
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote called (" & Debug_VarListString("E_QUOTE_NBR", poCFQ.E_QUOTE_NBR, "PO Ref", poCFQ.PO_Fields.PO_HDR_PO_REF) & ")"
+    
+    
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
-    
-    
-    Debug.Print "PeopleSoft_PurchaseOrder_CreateFromQuote"
-    
 
 
     Dim driver As SeleniumWrapper.WebDriver, By As New SeleniumWrapper.By
@@ -1069,8 +1204,6 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     Call PeopleSoft_NavigateTo_AddPO(session, poCFQ.PO_Fields.PO_BUSINESS_UNIT, poCFQ.PO_Fields.PO_BUSINESS_UNIT_Result)
     If poCFQ.PO_Fields.PO_BUSINESS_UNIT_Result.ValidationFailed Then GoTo ValidationFail
     
-    ' Test fail point
-    driver.findElementById "this element does not exist"
     
     
     PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_BUYER_ID"), CStr(poCFQ.PO_Fields.PO_HDR_BUYER_ID), poCFQ.PO_Fields.PO_HDR_BUYER_ID_Result
@@ -1088,6 +1221,8 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     
 
     ' Select CopyFrom eQuote and force load next page
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: select copy from eQuote"
+    
     Set elemSelect = driver.findElementById("PO_COPY_TMPLT_W_COPY_PO_FROM")
     elemSelect.AsSelect.selectByText "eQuote"
     PeopleSoft_Page_WaitForProcessing driver
@@ -1098,6 +1233,7 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
 
    
     ' <h1 class="PSSRCHTITLE">Create from Quote</h1>
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: waiting for 'Create from Quote' text"
     driver.waitForElementPresent "xpath=.//*[text()='Create from Quote']"
     
 
@@ -1114,13 +1250,16 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     PeopleSoft_Page_WaitForProcessing driver
     
     
-    Dim loadedQuoteNbr As String
-    loadedQuoteNbr = driver.findElementById("Z_E_QT_CPPO_VW_Z_QUOTE_NBR$0").Text
+    Dim pageQuoteNbr As String
+    pageQuoteNbr = driver.findElementById("Z_E_QT_CPPO_VW_Z_QUOTE_NBR$0").text
+    
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: pageQuoteNbr is '" & pageQuoteNbr & "'"
 
     ' Sanity check: check if loaded quote is the same as the provided E_QUOTE_NBR
-    If loadedQuoteNbr <> poCFQ.E_QUOTE_NBR Then
+    If pageQuoteNbr <> poCFQ.E_QUOTE_NBR Then
         poCFQ.HasError = True
-        poCFQ.GlobalError = "Sanity check failed: quote # mismatch. Quote # on page '" & loadedQuoteNbr & "' does not match provided quote # '" & poCFQ.E_QUOTE_NBR & "'"
+        poCFQ.GlobalError = "Sanity check failed: quote # mismatch. Quote # on page '" & pageQuoteNbr & "' does not match provided quote # '" & poCFQ.E_QUOTE_NBR & "'"
         GoTo ValidationFail
     End If
     
@@ -1164,35 +1303,11 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
         If poCFQ.PO_LineMods(i).PO_Line > 0 Then validLineModCount = validLineModCount + 1
     Next i
     
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: Processing line modifications (" & Debug_VarListString("LineModCount", poCFQ.PO_LineModCount, "validLineModCount", validLineModCount) & ")"
+    
     If validLineModCount > 0 Then
-        ' Begin - Sort Line Modifications by line #
-        'Dim PO_LineMod_SortedIdx() As Integer
-        'ReDim PO_LineMod_SortedIdx(1 To poCFQ.PO_LineModCount) As Integer
-        
-        'For i = 1 To poCFQ.PO_LineModCount: PO_LineMod_SortedIdx(i) = i: Next
-        
-        ' Bubble-sort algorithm
-        'For i = 1 To poCFQ.PO_LineModCount
-        '    For j = i + 1 To poCFQ.PO_LineModCount
-        '        If poCFQ.PO_LineMods(PO_LineMod_SortedIdx(j)).PO_Line < poCFQ.PO_LineMods(PO_LineMod_SortedIdx(i)).PO_Line Then
-        '            tmpIdx = PO_LineMod_SortedIdx(i)
-        '            PO_LineMod_SortedIdx(i) = PO_LineMod_SortedIdx(j)
-        '            PO_LineMod_SortedIdx(j) = tmpIdx
-        '        End If
-         '   Next j
-        'Next i
-        ' End - Sort Line Modifications by line #
-        
-        
-        'For i = 1 To poCFQ.PO_LineModCount
-        '    PO_LineMod = PO_LineMod_SortedIdx(i)
-        '    driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$" & (poCFQ.PO_LineMods(PO_LineMod).PO_Line - 1) & "', 0, 0, 'Expand Schedule Section', false, true);"
-        '    PeopleSoft_Page_WaitForProcessing driver
-        '    driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$232$$" & (poCFQ.PO_LineMods(PO_LineMod).PO_Line - 1) & "', 0, 0, 'Expand Distribution Section', false, true);"
-        '    PeopleSoft_Page_WaitForProcessing driver
-        'Next i
-        
-        
+       
         ' Expand All
         driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
         'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);"
@@ -1203,6 +1318,10 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
             
             
             If poCFQ.PO_LineMods(PO_LineMod).PO_Line > 0 Then
+                Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: Processing Line Mod #" & PO_LineMod & " (" & _
+                    Debug_VarListString("PO Line", poCFQ.PO_LineMods(PO_LineMod).PO_Line, "Item ID", poCFQ.PO_LineMods(PO_LineMod).PO_LINE_ITEM_ID) & ")"
+   
+            
                 ' Note: We ASSUME each line has a single schedule here
                 PO_pageLineIndex = poCFQ.PO_LineMods(PO_LineMod).PO_Line - 1
                 PO_pageScheduleIndex = poCFQ.PO_LineMods(PO_LineMod).PO_Line - 1
@@ -1277,20 +1396,20 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     Dim amntStr As String
     
     ' Total
-    amntStr = driver.findElementById("PO_PNLS_WRK_PO_AMT_TTL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_PO_AMT_TTL").text
     poCFQ.PO_AMNT_TOTAL = CurrencyFromString(amntStr)
     
     ' Total w/o Taxes, Freight and Misc
-    amntStr = driver.findElementById("PO_PNLS_WRK_MERCH_AMT_TTL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_MERCH_AMT_TTL").text
     poCFQ.PO_AMNT_MERCH_TOTAL = CurrencyFromString(amntStr)
     
     ' Taxes, Freight and Misc
-    amntStr = driver.findElementById("PO_PNLS_WRK_ADJ_AMT_TTL_LBL").Text
+    amntStr = driver.findElementById("PO_PNLS_WRK_ADJ_AMT_TTL_LBL").text
     poCFQ.PO_AMNT_FTM_TOTAL = CurrencyFromString(amntStr)
     
-    'poCFQ.PO_ID = "SUCCESS"
-    'PeopleSoft_PurchaseOrder_CreateFromQuote = True
-    'Exit Function
+    
+    
+    
     
     Dim result As Boolean
     
@@ -1305,6 +1424,8 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     End If
     
     poCFQ.PO_ID = poCFQ.BudgetCheck_Result.PO_ID
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote: complete (" & Debug_VarListString("PO ID", poCFQ.PO_ID) & ")"
     
     PeopleSoft_PurchaseOrder_CreateFromQuote = True
     Exit Function
@@ -1327,57 +1448,119 @@ End Function
 Public Function PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder As PeopleSoft_PurchaseOrder) As PeopleSoft_PurchaseOrder_PO_Defaults
 
     ' Auto calculates PO defaults. A field has a default value when all PO lines/schedules/distributions have the same value
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc called"
 
     Dim PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults
-
     Dim PO_Line As Integer, PO_Line_Schedule As Integer
     
     PO_Defaults.SCH_DUE_DATE = 0
-    PO_Defaults.SCH_SHIPTO_ID = 0
-    PO_Defaults.DIST_BUSINESS_UNIT_PC = ""
-    PO_Defaults.DIST_PROJECT_CODE = ""
-    PO_Defaults.DIST_ACTIVITY_ID = ""
-    PO_Defaults.DIST_LOCATION_ID = 0
     
+    PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC = ""
+    PO_Defaults.DIST_CAP_PROJECT_CODE = ""
+    PO_Defaults.DIST_CAP_ACTIVITY_ID = ""
+    PO_Defaults.DIST_CAP_SHIP_TO_ID = 0
+    PO_Defaults.DIST_CAP_LOCATION_ID = 0
+    
+    PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC = ""
+    PO_Defaults.DIST_EXP_PROJECT_CODE = ""
+    PO_Defaults.DIST_EXP_ACTIVITY_ID = ""
+    PO_Defaults.DIST_EXP_SHIP_TO_ID = 0
+    PO_Defaults.DIST_EXP_LOCATION_ID = 0
+    
+    Dim isExpenseLine As Boolean
+    Dim alreadyProcessedFirstCapitalLine As Boolean, alreadyProcessedFirstExpenseLine As Boolean
+    Dim lineItemID As String
+    
+    alreadyProcessedFirstCapitalLine = False
+    alreadyProcessedFirstExpenseLine = False
    
     For PO_Line = 1 To purchaseOrder.PO_LineCount
         For PO_Line_Schedule = 1 To purchaseOrder.PO_Lines(PO_Line).ScheduleCount
-        
-            If PO_Line = 1 And PO_Line_Schedule = 1 Then
-                PO_Defaults.SCH_DUE_DATE = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE
-                PO_Defaults.SCH_SHIPTO_ID = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.SHIPTO_ID
-                PO_Defaults.DIST_BUSINESS_UNIT_PC = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.BUSINESS_UNIT_PC
-                PO_Defaults.DIST_PROJECT_CODE = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.PROJECT_CODE
-                PO_Defaults.DIST_ACTIVITY_ID = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID
-                PO_Defaults.DIST_LOCATION_ID = purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID
-            Else
-                If PO_Defaults.SCH_DUE_DATE <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE Then
-                    PO_Defaults.SCH_DUE_DATE = 0
-                End If
-                If PO_Defaults.SCH_SHIPTO_ID <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.SHIPTO_ID Then
-                    PO_Defaults.SCH_SHIPTO_ID = 0
-                End If
-                If PO_Defaults.DIST_BUSINESS_UNIT_PC <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.BUSINESS_UNIT_PC Then
-                    PO_Defaults.DIST_BUSINESS_UNIT_PC = ""
-                End If
-                If PO_Defaults.DIST_PROJECT_CODE <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.PROJECT_CODE Then
-                    PO_Defaults.DIST_PROJECT_CODE = ""
-                End If
-                If PO_Defaults.DIST_ACTIVITY_ID <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID Then
-                    PO_Defaults.DIST_ACTIVITY_ID = ""
-                End If
-                If PO_Defaults.DIST_LOCATION_ID <> purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID Then
-                    PO_Defaults.DIST_LOCATION_ID = 0
+            'Check if expense line
+            isExpenseLine = False
+            lineItemID = UCase$(purchaseOrder.PO_Lines(PO_Line).LineFields.PO_LINE_ITEM_ID)
+            
+            If Len(lineItemID) >= Len("EXP-") Then
+                If Left$(lineItemID, Len("EXP-")) = "EXP-" Then isExpenseLine = True
+                
+                If isExpenseLine = False And Len(lineItemID) >= Len("CR-EXP-") Then
+                    If Left$(lineItemID, Len("CR-EXP-")) = "CR-EXP-" Then isExpenseLine = True
                 End If
             End If
+            
+            
+            With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule)
+                ' Process fields which are capital/expense agnostic
+                If PO_Line = 1 And PO_Line_Schedule = 1 Then
+                    ' first line: use to set default values
+                    PO_Defaults.SCH_DUE_DATE = .ScheduleFields.DUE_DATE
+                Else
+                    ' different field values -> then set default to null-equivalent value
+                    If PO_Defaults.SCH_DUE_DATE <> .ScheduleFields.DUE_DATE Then PO_Defaults.SCH_DUE_DATE = 0
+                End If
+                
+                If isExpenseLine Then
+                    If alreadyProcessedFirstExpenseLine = False Then
+                        ' first capital project line: set as default value
+                        alreadyProcessedFirstExpenseLine = True
+                        
+                        PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC = .DistributionFields.BUSINESS_UNIT_PC
+                        PO_Defaults.DIST_EXP_PROJECT_CODE = .DistributionFields.PROJECT_CODE
+                        PO_Defaults.DIST_EXP_ACTIVITY_ID = .DistributionFields.ACTIVITY_ID
+                        PO_Defaults.DIST_EXP_SHIP_TO_ID = .ScheduleFields.SHIPTO_ID
+                        PO_Defaults.DIST_EXP_LOCATION_ID = .DistributionFields.LOCATION_ID
+                    Else
+                        If PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC <> .DistributionFields.BUSINESS_UNIT_PC Then PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC = ""
+                        If PO_Defaults.DIST_EXP_PROJECT_CODE <> .DistributionFields.PROJECT_CODE Then PO_Defaults.DIST_EXP_PROJECT_CODE = ""
+                        If PO_Defaults.DIST_EXP_ACTIVITY_ID <> .DistributionFields.ACTIVITY_ID Then PO_Defaults.DIST_EXP_ACTIVITY_ID = ""
+                        If PO_Defaults.DIST_EXP_SHIP_TO_ID <> .ScheduleFields.SHIPTO_ID Then PO_Defaults.DIST_EXP_SHIP_TO_ID = 0
+                        If PO_Defaults.DIST_EXP_LOCATION_ID <> .DistributionFields.LOCATION_ID Then PO_Defaults.DIST_EXP_LOCATION_ID = 0
+                    End If
+                Else
+                    If alreadyProcessedFirstCapitalLine = False Then
+                        ' first capital project line: set as default value
+                        alreadyProcessedFirstCapitalLine = True
+                        
+                        PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC = .DistributionFields.BUSINESS_UNIT_PC
+                        PO_Defaults.DIST_CAP_PROJECT_CODE = .DistributionFields.PROJECT_CODE
+                        PO_Defaults.DIST_CAP_ACTIVITY_ID = .DistributionFields.ACTIVITY_ID
+                        PO_Defaults.DIST_CAP_SHIP_TO_ID = .ScheduleFields.SHIPTO_ID
+                        PO_Defaults.DIST_CAP_LOCATION_ID = .DistributionFields.LOCATION_ID
+                    Else
+                        If PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC <> .DistributionFields.BUSINESS_UNIT_PC Then PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC = ""
+                        If PO_Defaults.DIST_CAP_PROJECT_CODE <> .DistributionFields.PROJECT_CODE Then PO_Defaults.DIST_CAP_PROJECT_CODE = ""
+                        If PO_Defaults.DIST_CAP_ACTIVITY_ID <> .DistributionFields.ACTIVITY_ID Then PO_Defaults.DIST_CAP_ACTIVITY_ID = ""
+                        If PO_Defaults.DIST_CAP_SHIP_TO_ID <> .ScheduleFields.SHIPTO_ID Then PO_Defaults.DIST_CAP_SHIP_TO_ID = 0
+                        If PO_Defaults.DIST_CAP_LOCATION_ID <> .DistributionFields.LOCATION_ID Then PO_Defaults.DIST_CAP_LOCATION_ID = 0
+                    End If
+                End If
+            End With
+        
+
             
         Next PO_Line_Schedule
     Next PO_Line
     
     
-    If PO_Defaults.DIST_PROJECT_CODE = "" Then ' Activity & Location default requires as project code default
-        PO_Defaults.DIST_ACTIVITY_ID = ""
-        PO_Defaults.DIST_LOCATION_ID = 0
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc: PO Defaults (Common): " & Debug_VarListString("SCH_DUE_DATE", PO_Defaults.SCH_DUE_DATE)
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc: PO Defaults (CAPITAL): " & Debug_VarListString( _
+        "BUSINESS_UNIT_PC", PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC, _
+        "PROJECT_CODE", PO_Defaults.DIST_CAP_PROJECT_CODE, _
+        "ACTIVITY_ID", PO_Defaults.DIST_CAP_ACTIVITY_ID, _
+        "SHIPTO_ID", PO_Defaults.DIST_CAP_SHIP_TO_ID, _
+        "LOCATION_ID", PO_Defaults.DIST_CAP_LOCATION_ID)
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc: PO Defaults (EXPENSE): " & Debug_VarListString( _
+        "BUSINESS_UNIT_PC", PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC, _
+        "PROJECT_CODE", PO_Defaults.DIST_EXP_PROJECT_CODE, _
+        "ACTIVITY_ID", PO_Defaults.DIST_EXP_ACTIVITY_ID, _
+        "SHIPTO_ID", PO_Defaults.DIST_EXP_SHIP_TO_ID, _
+        "LOCATION_ID", PO_Defaults.DIST_EXP_LOCATION_ID)
+    
+    
+    If PO_Defaults.DIST_CAP_PROJECT_CODE = "" Then ' Activity & Location default requires as project code default
+        PO_Defaults.DIST_CAP_ACTIVITY_ID = ""
+        PO_Defaults.DIST_CAP_LOCATION_ID = 0
     End If
         
     
@@ -1386,124 +1569,130 @@ Public Function PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder As P
 End Function
 Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWrapper.WebDriver, PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults) As Boolean
 
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+     
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_Fill called"
+
+
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
 
     Dim isAnyDefaultSpecified As Boolean
+    Dim popupResult As PeopleSoft_Page_PopupCheckResult
     
-    Dim PopupText As String
     
     isAnyDefaultSpecified = False
     
     If PO_Defaults.SCH_DUE_DATE > 0 Then isAnyDefaultSpecified = True
-    If PO_Defaults.SCH_SHIPTO_ID > 0 Then isAnyDefaultSpecified = True
-    If Len(PO_Defaults.DIST_BUSINESS_UNIT_PC) > 0 Then isAnyDefaultSpecified = True
-    If Len(PO_Defaults.DIST_PROJECT_CODE) > 0 Then isAnyDefaultSpecified = True
-    If Len(PO_Defaults.DIST_ACTIVITY_ID) > 0 Then isAnyDefaultSpecified = True
-    If PO_Defaults.DIST_LOCATION_ID > 0 Then isAnyDefaultSpecified = True
+    
+    If Len(PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC) > 0 Then isAnyDefaultSpecified = True
+    If Len(PO_Defaults.DIST_CAP_PROJECT_CODE) > 0 Then isAnyDefaultSpecified = True
+    If Len(PO_Defaults.DIST_CAP_ACTIVITY_ID) > 0 Then isAnyDefaultSpecified = True
+    If PO_Defaults.DIST_CAP_SHIP_TO_ID > 0 Then isAnyDefaultSpecified = True
+    If PO_Defaults.DIST_CAP_LOCATION_ID > 0 Then isAnyDefaultSpecified = True
+    
+    If Len(PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC) > 0 Then isAnyDefaultSpecified = True
+    If Len(PO_Defaults.DIST_EXP_PROJECT_CODE) > 0 Then isAnyDefaultSpecified = True
+    If Len(PO_Defaults.DIST_EXP_ACTIVITY_ID) > 0 Then isAnyDefaultSpecified = True
+    If PO_Defaults.DIST_EXP_SHIP_TO_ID > 0 Then isAnyDefaultSpecified = True
+    If PO_Defaults.DIST_EXP_LOCATION_ID > 0 Then isAnyDefaultSpecified = True
+
+    
+    If isAnyDefaultSpecified = False Then
+        Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_Fill: no default specified"
+        PeopleSoft_PurchaseOrder_PO_Defaults_Fill = True
+        Exit Function
+    End If
+        
+    
+     ' Click PO Defaults
+    driver.findElementById("PO_PNLS_WRK_GOTO_DEFAULTS").Click
+    'driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_DEFAULTS');"
+    PeopleSoft_Page_WaitForProcessing driver
+     
+     
+    popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=False)
+     
+    If popupResult.HasPopup Then
+        PO_Defaults.GlobalError = "Unexpected Popup:" & popupResult.popupText
+        PO_Defaults.HasGlobalError = True
+    
+        PeopleSoft_PurchaseOrder_PO_Defaults_Fill = False
+        Exit Function
+    End If
+    
+    'driver.waitForElementPresent "css=#PO_HDR_Z_QUOTE_NBR"
+        
+    If PO_Defaults.SCH_DUE_DATE > 0 Then
+        PeopleSoft_Page_SetValidatedField driver:=driver, fieldElementID:=("PO_DFLT_TBL_DUE_DT"), fieldValue:=Format(PO_Defaults.SCH_DUE_DATE, "mm/dd/yyyy"), _
+            validationResult:=PO_Defaults.SCH_DUE_DATE_Result, _
+            expectedPopupContents:="*Due Date selected is a weekend or a public holiday*"
+        
+        If PO_Defaults.SCH_DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+
+    ' Expand Distributions
+    driver.runScript "javascript:submitAction_win0(document.win0,'PO_DFLT_DISTRIB$htab$0');"
+    PeopleSoft_Page_WaitForProcessing driver
+    
+
+    ' Fill capital distributions
+    If Len(PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC) > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("BUSINESS_UNIT_PC$0"), PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC, PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC_Result
+        If PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If Len(PO_Defaults.DIST_CAP_PROJECT_CODE) > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("PROJECT_ID$0"), PO_Defaults.DIST_CAP_PROJECT_CODE, PO_Defaults.DIST_CAP_PROJECT_CODE_Result
+        If PO_Defaults.DIST_CAP_PROJECT_CODE_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If Len(PO_Defaults.DIST_CAP_ACTIVITY_ID) > 0 Then
+        PeopleSoft_PurchaseOrder_SetValidatedField_ActivityID driver, _
+            "ACTIVITY_ID$0", PO_Defaults.DIST_CAP_ACTIVITY_ID, PO_Defaults.DIST_CAP_ACTIVITY_ID_Result, "ACTIVITY_ID$prompt$0"
+        If PO_Defaults.DIST_CAP_ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If PO_Defaults.DIST_CAP_SHIP_TO_ID > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("PO_DFLT_DISTRIB_SHIPTO_ID$0"), CStr(PO_Defaults.DIST_CAP_SHIP_TO_ID), PO_Defaults.DIST_CAP_SHIP_TO_ID_Result
+        If PO_Defaults.DIST_CAP_SHIP_TO_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    
+    If PO_Defaults.DIST_CAP_LOCATION_ID > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("LOCATION$0"), CStr(PO_Defaults.DIST_CAP_LOCATION_ID), PO_Defaults.DIST_CAP_LOCATION_ID_Result
+        If PO_Defaults.DIST_CAP_LOCATION_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    
+    ' Fill expense distributions
+    If Len(PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC) > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("Z_EXP_PC_BU$0"), PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC, PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC_Result
+        If PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If Len(PO_Defaults.DIST_EXP_PROJECT_CODE) > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("PROJECT_ID_2$0"), PO_Defaults.DIST_EXP_PROJECT_CODE, PO_Defaults.DIST_EXP_PROJECT_CODE_Result
+        If PO_Defaults.DIST_EXP_PROJECT_CODE_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If Len(PO_Defaults.DIST_EXP_ACTIVITY_ID) > 0 Then
+        PeopleSoft_PurchaseOrder_SetValidatedField_ActivityID driver, _
+            "ACTIVITY_ID_2$0", PO_Defaults.DIST_EXP_ACTIVITY_ID, PO_Defaults.DIST_EXP_ACTIVITY_ID_Result, "ACTIVITY_ID_2$prompt$0"
+        If PO_Defaults.DIST_EXP_ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    If PO_Defaults.DIST_EXP_SHIP_TO_ID > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("PO_DFLT_DISTRIB_SHIPTO_ID_DEFAULT$0"), CStr(PO_Defaults.DIST_EXP_SHIP_TO_ID), PO_Defaults.DIST_EXP_SHIP_TO_ID_Result
+        If PO_Defaults.DIST_EXP_SHIP_TO_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
+    
+    If PO_Defaults.DIST_EXP_LOCATION_ID > 0 Then
+        PeopleSoft_Page_SetValidatedField driver, ("PO_DFLT_DISTRIB_Z_EXP_CF1$0"), CStr(PO_Defaults.DIST_EXP_LOCATION_ID), PO_Defaults.DIST_EXP_LOCATION_ID_Result
+        If PO_Defaults.DIST_EXP_LOCATION_ID_Result.ValidationFailed Then GoTo ValidationFail
+    End If
 
 
     ' Need to implement expense chartfields:
-    ' Exp PC BU: Z_EXP_PC_BU$0
-    ' Exp Project ID: PROJECT_ID_2$0
-    ' Exp Activity ID: ACTIVITY_ID_2$0
-    ' Exp: Ship to ID: PO_DFLT_DISTRIB_SHIPTO_ID_DEFAULT$0
-    ' Exp: Location: PO_DFLT_DISTRIB_Z_EXP_CF1$0
     ' Exp Cost Center: PO_DFLT_DISTRIB_Z_EXP_DEPTID$0
     ' Exp Product Code: PO_DFLT_DISTRIB_Z_EXP_PROD$0
     
-    If isAnyDefaultSpecified Then
-     
-        driver.findElementById("PO_PNLS_WRK_GOTO_DEFAULTS").Click
-        'javascript:hAction_win0(document.win0,'PO_PNLS_WRK_GOTO_DEFAULTS', 0, 0, 'Header Details', false, true);
-        
-         PeopleSoft_Page_WaitForProcessing driver
-         
-         
-         PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-         
-         If Len(PopupText) > 0 Then
-            PO_Defaults.GlobalError = PopupText
-            PO_Defaults.HasGlobalError = True
-         
-            PeopleSoft_PurchaseOrder_PO_Defaults_Fill = False
-            Exit Function
-         End If
-        
-        'driver.waitForElementPresent "css=#PO_HDR_Z_QUOTE_NBR"
-            
-        If PO_Defaults.SCH_DUE_DATE > 0 Then
-            PeopleSoft_Page_SetValidatedField driver:=driver, fieldElementID:=("PO_DFLT_TBL_DUE_DT"), fieldValue:=Format(PO_Defaults.SCH_DUE_DATE, "mm/dd/yyyy"), _
-                validationResult:=PO_Defaults.SCH_DUE_DATE_Result, _
-                expectedPopupContents:="*Due Date selected is a weekend or a public holiday*"
-            
-            If PO_Defaults.SCH_DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
-        End If
     
-        ' Expand Distributions
-        ' driver.runscript "javascript:submitAction_win0(document.win0,'PO_DFLT_DISTRIB$htab$0');"
-        PeopleSoft_Page_WaitForProcessing driver
+    ' Click save
+    driver.findElementById("#ICSave").Click
+    'driver.runScript "javascript:submitAction_win0(document.win0, '#ICSave');" ' work-around - Clicks 'Save'
+    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
         
-
-        
-        If Len(PO_Defaults.DIST_BUSINESS_UNIT_PC) > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("BUSINESS_UNIT_PC$0"), PO_Defaults.DIST_BUSINESS_UNIT_PC, PO_Defaults.DIST_BUSINESS_UNIT_PC_Result
-            If PO_Defaults.DIST_BUSINESS_UNIT_PC_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
-        If Len(PO_Defaults.DIST_PROJECT_CODE) > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("PROJECT_ID$0"), PO_Defaults.DIST_PROJECT_CODE, PO_Defaults.DIST_PROJECT_CODE_Result
-            If PO_Defaults.DIST_PROJECT_CODE_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
-        If Len(PO_Defaults.DIST_ACTIVITY_ID) > 0 Then
-            PeopleSoft_PurchaseOrder_SetValidatedField_ActivityID driver, _
-                "ACTIVITY_ID$0", PO_Defaults.DIST_ACTIVITY_ID, PO_Defaults.DIST_ACTIVITY_ID_Result, "ACTIVITY_ID$prompt$0"
-        
-            If PO_Defaults.DIST_ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
-            
-            'PeopleSoft_Page_SetValidatedField driver, _
-            '    ("ACTIVITY_ID$0"), _
-            '    PO_Defaults.DIST_ACTIVITY_ID, _
-            '    PO_Defaults.DIST_ACTIVITY_ID_Result
-           '
-           ' If PO_Defaults.DIST_ACTIVITY_ID_Result.ValidationFailed Then
-           '     If InStr(1, PO_Defaults.DIST_ACTIVITY_ID_Result.ValidationErrorText, "Invalid value") > 0 Then
-           '         Dim tmpFVR As PeopleSoft_Field_ValidationResult
-           '         Dim activityListString As String
-           '
-           '         PeopleSoft_Page_SetValidatedField driver, ("ACTIVITY_ID$0"), "", tmpFVR, False
-           '
-           '         activityListString = PeopleSoft_PurchaseOrder_Extract_ActivityIDs(driver, "ACTIVITY_ID$prompt$0")
-           '
-           '         If Len(activityListString) > 0 Then PO_Defaults.DIST_ACTIVITY_ID_Result.ValidationErrorText = "Invalid activity ID. Valid values are as follows: " & activityListString
-   
-            '    End If
-                
-            '    GoTo ValidationFail
-            'End If
-        End If
-        
-        
-        
-        
-        If PO_Defaults.SCH_SHIPTO_ID > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("PO_DFLT_DISTRIB_SHIPTO_ID$0"), CStr(PO_Defaults.SCH_SHIPTO_ID), PO_Defaults.SCH_SHIPTO_ID_Result
-            If PO_Defaults.SCH_SHIPTO_ID_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
-        If PO_Defaults.DIST_LOCATION_ID > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("LOCATION$0"), CStr(PO_Defaults.DIST_LOCATION_ID), PO_Defaults.DIST_LOCATION_ID_Result
-            If PO_Defaults.DIST_LOCATION_ID_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
-        
-        
-        driver.findElementById("#ICSave").Click
-        'driver.runScript "javascript:submitAction_win0(document.win0, '#ICSave');" ' work-around - Clicks 'Save'
-        
-        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
-        
-    End If
     
     
     PeopleSoft_PurchaseOrder_PO_Defaults_Fill = True
@@ -1523,8 +1712,10 @@ ExceptionThrown:
 End Function
 Private Function PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver As SeleniumWrapper.WebDriver, poFields As PeopleSoft_PurchaseOrder_Fields) As Boolean
     
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page called"
     
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
     Dim we As WebElement
     Dim weCollection As WebElementCollection
@@ -1548,6 +1739,8 @@ Private Function PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver As Seleni
         'End If
         
         If Len(poFields.PO_HDR_COMMENTS) > 0 Then
+            Debug_Print "PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page: Entering comments"
+            
             driver.findElementById("COMM_WRK1_COMMENTS_2000$0").Clear
             driver.findElementById("COMM_WRK1_COMMENTS_2000$0").SendKeys poFields.PO_HDR_COMMENTS
             PeopleSoft_Page_WaitForProcessing driver
@@ -1557,6 +1750,8 @@ Private Function PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver As Seleni
         
         ' If quote file provided -> attach quote
         If Len(poFields.Quote_Attachment_FilePath) > 0 Then
+            Debug_Print "PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page: attaching quote: " & poFields.Quote_Attachment_FilePath
+            
             driver.findElementById("PV_ATTACH_WRK_SCM_UPLOAD$0").Click
             'driver.runScript "javascript:submitAction_win2(document.win2, 'PV_ATTACH_WRK_SCM_UPLOAD$0');"
             PeopleSoft_Page_WaitForProcessing driver
@@ -1586,7 +1781,7 @@ Private Function PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver As Seleni
             
             If popupCheckResult.HasPopup Then
                 poFields.Quote_Attachment_FilePath_Result.ValidationFailed = True
-                poFields.Quote_Attachment_FilePath_Result.ValidationErrorText = "Attach quote failed: Unexpected popup: " & popupCheckResult.PopupText
+                poFields.Quote_Attachment_FilePath_Result.ValidationErrorText = "Attach quote failed: Unexpected popup: " & popupCheckResult.popupText
                 GoTo ValidationFail
             End If
                         
@@ -1594,7 +1789,7 @@ Private Function PeopleSoft_PurchaseOrder_PO_Fill_Comments_Page(driver As Seleni
             ' Check if file was successfully uploaded
             Dim uploadedFilename As String
             Set we = driver.findElementById("PV_ATTACH_WRK_ATTACHUSERFILE$0")
-            uploadedFilename = we.Text
+            uploadedFilename = we.text
             
             If Len(Trim(UCase(uploadedFilename))) = 0 Then
                 ' Need a better method here than raising an exception
@@ -1720,7 +1915,7 @@ Private Function PeopleSoft_Page_ModalWindow_ExtractSearchTableContents(driver A
         ReDim returnColNums(1 To returnColumnCount) As Long
         
         For i = 1 To columnCount
-            pageColName = weCollection.Item(i).Text
+            pageColName = weCollection.Item(i).text
             
             ' See if this column is in the list of return columns
             For j = 1 To returnColumnCount
@@ -1750,7 +1945,7 @@ Private Function PeopleSoft_Page_ModalWindow_ExtractSearchTableContents(driver A
         ReDim returnColNums(1 To columnCount) As Long
         
         For i = 1 To columnCount
-            returnColNames(i) = weCollection.Item(i).Text
+            returnColNames(i) = weCollection.Item(i).text
             returnColNums(i) = i
         Next i
         
@@ -1776,9 +1971,9 @@ Private Function PeopleSoft_Page_ModalWindow_ExtractSearchTableContents(driver A
             Set we = driver.findElementById("RESULT" & (returnColNums(j) + 2) & "$" & i)
             
             If returnColumnCount = 1 Then
-                ret(i + 1) = we.Text
+                ret(i + 1) = we.text
             Else
-                ret(i + 1, j) = we.Text
+                ret(i + 1, j) = we.text
             End If
         Next j
     Next i
@@ -1980,8 +2175,9 @@ ExceptionThrown:
 End Function
 
 
-Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As PeopleSoft_Session, ByRef poChangeOrder As PeopleSoft_PurchaseOrder_ChangeOrder) As Boolean
+Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Session, ByRef poChangeOrder As PeopleSoft_PurchaseOrder_ChangeOrder) As Boolean
     
+    Debug_Print "PeopleSoft_ChangeOrder_Process called (" & Debug_VarListString("PO ID", poChangeOrder.PO_ID) & ")"
     
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
     
@@ -1989,6 +2185,25 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
     Dim By As New By, Assert As New Assert, Verify As New Verify
     Dim driver As New SeleniumWrapper.WebDriver
     Dim popupResult As PeopleSoft_Page_PopupCheckResult
+    Dim i As Long, j As Long
+    
+    
+    ' Pre-Check ensure there are no duplicate PO lines/schedules in ChangeOrderItems
+    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+        For j = i + 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+            If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line = poChangeOrder.PO_ChangeOrder_Items(j).PO_Line _
+              And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule = poChangeOrder.PO_ChangeOrder_Items(j).PO_Schedule Then
+                poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                poChangeOrder.PO_ChangeOrder_Items(j).HasError = True
+                poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Duplicate line/schedule"
+                poChangeOrder.PO_ChangeOrder_Items(j).ItemError = "Duplicate line/schedule"
+                
+                poChangeOrder.HasError = True
+                poChangeOrder.GlobalError = "Duplicate line/schedule in one more change order items"
+            End If
+        Next j
+    Next i
+    
     
     
     PeopleSoft_Login session
@@ -1997,7 +2212,7 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
         poChangeOrder.GlobalError = "Logon Error: " & session.LogonError
         poChangeOrder.HasError = True
         
-        PeopleSoft_PurchaseOrder_ProcessChangeOrder = False
+        PeopleSoft_ChangeOrder_Process = False
         Exit Function
     End If
 
@@ -2005,23 +2220,33 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
     Set driver = session.driver
     
     
-    PeopleSoft_NavigateTo_ExistingPO session, poChangeOrder.PO_BU, poChangeOrder.PO_ID
-    
-    ' TODO: Check if we navigated to a PO
-    If PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[contains(text(),'Purchase order being processed by batch programs')]")) Then
-        poChangeOrder.GlobalError = "PO currently being processed by other programs."
+    If PeopleSoft_NavigateTo_ExistingPO(session, poChangeOrder.PO_BU, poChangeOrder.PO_ID) = False Then
+        poChangeOrder.GlobalError = "PO navigation failed"
         poChangeOrder.HasError = True
         
         GoTo ChangeOrderFailed
     End If
     
+    
+    
+    
+    If PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[contains(text(),'Purchase order being processed by batch programs')]")) Then
+        Debug_Print "PeopleSoft_ChangeOrder_Process: Check for batch processing: In-Use (fail)"
+        poChangeOrder.GlobalError = "PO is currently being processed by other programs. Try again later."
+        poChangeOrder.HasError = True
+        
+        GoTo ChangeOrderFailed
+    End If
+    
+    Debug_Print "PeopleSoft_ChangeOrder_Process: Check for batch processing: OK"
+    
     ' -------------------------------------------------------------------
     ' Begin - Comments Section
     ' -------------------------------------------------------------------
-    If poChangeOrder.PO_HDR_FLG_SEND_TO_VENDOR <> KeepExistingValue Then
-        Dim elID As String
+    Debug_Print "PeopleSoft_ChangeOrder_Process: Comments section"
+    
+    If poChangeOrder.PO_HDR_FLG_SEND_TO_VENDOR <> PeopleSoft_Page_CheckboxAction.KeepExistingValue Then
         Dim weCmtsLink As SeleniumWrapper.WebElement
-        
         
         If PeopleSoft_Page_ElementExists(driver, By.id("COMM_WRK1_COMMENTS1_PB")) Then
             ' Edit Comments
@@ -2055,9 +2280,9 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
             chkElem.Click
         End If
     
+    
         driver.findElementById("#ICSave").Click
         'driver.runScript "javascript:submitAction_win0(document.win0, '#ICSave');" ' work-around - Clicks 'Save'
-        
         PeopleSoft_Page_WaitForProcessing driver
         
         
@@ -2083,12 +2308,12 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
     ' -------------------------------------------------------------------
     ' Begin - PO Defaults Section
     ' -------------------------------------------------------------------
-    Dim PopupText As String, popUpIsExpected As Boolean
     Dim result As Boolean
-    
     Dim modifyDefaults As Boolean
     
-    modifyDefaults = poChangeOrder.PO_DUE_DATE > 0 Or Len(poChangeOrder.PO_PROJECT_CODE) > 0
+    modifyDefaults = poChangeOrder.PO_DUE_DATE > 0
+    
+    Debug_Print "PeopleSoft_ChangeOrder_Process: PO Default Section (" & Debug_VarListString("modifyDefaults", modifyDefaults) & ")"
     
     If modifyDefaults Then
         
@@ -2096,25 +2321,21 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
         Dim PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults
         
         PO_Defaults.SCH_DUE_DATE = poChangeOrder.PO_DUE_DATE
-        PO_Defaults.DIST_PROJECT_CODE = poChangeOrder.PO_PROJECT_CODE
     
         result = PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver, PO_Defaults)
         
-        poChangeOrder.PO_DUE_DATE_Result = PO_Defaults.SCH_DUE_DATE_Result
-        poChangeOrder.PO_PROJECT_CODE_Result = PO_Defaults.DIST_PROJECT_CODE_Result
+        Debug_Print "PeopleSoft_ChangeOrder_Process: PO Default Fill Result (" & Debug_VarListString("Result", result) & ")"
         
+        poChangeOrder.PO_DUE_DATE_Result = PO_Defaults.SCH_DUE_DATE_Result
         
         If result = False Then
             poChangeOrder.HasError = True
-            
             If PO_Defaults.HasGlobalError Then poChangeOrder.GlobalError = PO_Defaults.GlobalError
             
-            
-            PeopleSoft_PurchaseOrder_ProcessChangeOrder = False
-            Exit Function
+            GoTo ChangeOrderFailed
         End If
         
-        ' Suppress popup
+        ' Suppress expected popups - may be multiple
         Do
             popupResult = PeopleSoft_Page_CheckForPopup(driver, acknowledgePopup:=True, raiseErrorIfUnexpected:=False, _
                             expectedContent:=Array( _
@@ -2122,269 +2343,58 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
                                 "*This action will create a change order*", _
                                 "*This PO has been dispatched, add/delete/change a line or schedule will create a change order*" _
                                 ))
+            If popupResult.HasPopup = False Then Exit Do
             
             If popupResult.IsExpected = False Then
                 poChangeOrder.HasError = True
-                poChangeOrder.GlobalError = "Unexpected Popup: " & popupResult.PopupText
+                poChangeOrder.GlobalError = "Unexpected Popup: " & popupResult.popupText
         
                 GoTo ChangeOrderFailed
             End If
         Loop While popupResult.HasPopup
         
-        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-        
-        'If Len(popUpText) > 0 Then
-        '    popUpIsExpected = InStr(1, popUpText, "Default values will be applied only to PO lines that are not received or invoiced") > 0
-        '    PeopleSoft_Page_WaitForProcessing driver
-        '
-        '    If popUpIsExpected = False Then
-        '        poChangeOrder.HasError = True
-        '        poChangeOrder.GlobalError = "Unexpected Popup: " & popUpText
-        '
-        '        GoTo ChangeOrderFailed
-        '    End If
-        'End If
-        
-        'driver.Wait 500 ' wait 0.5s
-        
-        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-        
-        'If Len(popUpText) > 0 Then
-        '    popUpIsExpected = InStr(1, popUpText, "This action will create a change order") > 0
-        '
-        '    If popUpIsExpected = False Then
-        '        poChangeOrder.HasError = True
-        '        poChangeOrder.GlobalError = "Unexpected Popup: " & popUpText
-        '
-        '        GoTo ChangeOrderFailed
-        '    End If
-        'End If
-        PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-        
-        'If Len(popUpText) > 0 Then
-        '    popUpIsExpected = InStr(1, popUpText, "This PO has been dispatched, add/delete/change a line or schedule will create a change order.") > 0
-        '
-        '    If popUpIsExpected = False Then
-        '        poChangeOrder.HasError = True
-        '        poChangeOrder.GlobalError = "Unexpected Popup: " & popUpText
-        '
-        '        GoTo ChangeOrderFailed
-        '    End If
-        'End If
-        
-        ' If we modified the defaults, then collapse all - required for any individual change o        driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_COLLAPSE_ALL_PB', 0, 0, 'Collapse All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
-        'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_COLLAPSE_ALL_PB', 0, 0, 'Collapse All', false, true);"
-        PeopleSoft_Page_WaitForProcessing driver
-        
-        ' driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);"
     End If
     ' -------------------------------------------------------------------
     ' End - PO Defaults Section
     ' -------------------------------------------------------------------
     
-
-
+    ' Calculate number of valid change order items
+    Dim validChangeOrderItemCount As Long: validChangeOrderItemCount = 0
     
-    ' ---------------------------------------------------------------
-    ' Begin - Process Change Orders for individual items/schedules
-    ' ---------------------------------------------------------------
-    Dim paginationText As String, posTo As Integer, posOf As Integer
-    Dim pageLineFrom As Integer, pageLineTo As Integer, pageLineTotal As Integer
-    Dim anyLineEditsOnPage As Boolean
+    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+        If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line > 0 And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule > 0 Then validChangeOrderItemCount = validChangeOrderItemCount
+    Next i
     
-    Dim isSinglePagePO As Boolean
     
-    Dim numProcessed As Integer
-    
-    Dim i As Integer
-    
-   
-    If poChangeOrder.PO_ChangeOrder_ItemCount > 0 Then
-        
-        ' The below
-        
-        isSinglePagePO = True
-        numProcessed = 0
-        
-        Do
-            anyLineEditsOnPage = False
-            
-            
-            If PeopleSoft_Page_ElementExists(driver, By.id("PO_SCR_NAV_WRK_SRCH_RSLT_MSG")) Then
-                isSinglePagePO = False
-            
-                paginationText = driver.findElementById("PO_SCR_NAV_WRK_SRCH_RSLT_MSG").Text  ' example: 1 to 75 of 77
-            
-                posTo = InStr(1, paginationText, " to ")
-                posOf = InStr(1, paginationText, " of ")
-                
-                Debug.Assert posTo > 0
-                Debug.Assert posOf > 0
-                Debug.Assert posOf > posTo
-                
-                pageLineFrom = Mid(paginationText, 1, posTo - 1)
-                pageLineTo = Mid(paginationText, posTo + Len(" to "), posOf - posTo - Len(" to "))
-                pageLineTotal = Mid(paginationText, posOf + Len(" of "))
-                
-                anyLineEditsOnPage = False
-                
-                For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-                    If pageLineFrom <= poChangeOrder.PO_ChangeOrder_Items(i).PO_Line And poChangeOrder.PO_ChangeOrder_Items(i).PO_Line <= pageLineTo Then
-                        anyLineEditsOnPage = True
-                        Exit For
-                    End If
-                Next i
-            Else
-                pageLineFrom = 1
-                pageLineTo = 9999
-            End If
-            
-            ' ------------------------------
-            ' Begin - Multi-page Workaround
-            ' ------------------------------
-            ' For some reason, if the PO spans multiple pages, moving from the first page to the second does not work (the browser hangs).
-            ' Therefore, we can only process a change order for items on the first page. If any change order item
-            ' exists outside of the first page, an error will be thrown and the change order canceled.
-            ' This entire section can be removed after the issue is fixed (not likely)
-            If True Then
-                Dim anyLineEditsOutsideOfPage As Boolean: anyLineEditsOutsideOfPage = False
-                
-                For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-                    If pageLineFrom > poChangeOrder.PO_ChangeOrder_Items(i).PO_Line Or poChangeOrder.PO_ChangeOrder_Items(i).PO_Line > pageLineTo Then
-                        anyLineEditsOutsideOfPage = True
-                        poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
-                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line exists outside of first PO page"
-                        Exit For
-                    End If
-                Next i
-                
-                If anyLineEditsOutsideOfPage Then
-                    poChangeOrder.HasError = True
-                    poChangeOrder.GlobalError = "Change order needs to be performed manually: one or more lines exists outside of first PO page"
-                
-                    GoTo ChangeOrderFailed
-                End If
-            End If
-            ' ------------------------------
-            '- End - Multi-page Workaround
-            ' ------------------------------
-            
-            If anyLineEditsOnPage Or isSinglePagePO Then
-                Dim pageLineIndex As Integer, pageSchIndex As Integer
-                Dim lineIndex As Integer
-                
-                pageLineIndex = 0
-                pageSchIndex = 0
-                
-                
-                
-                ' Expand All
-                driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
-                'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);"
-                PeopleSoft_Page_WaitForProcessing driver
-                
-                For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-                    If pageLineFrom <= poChangeOrder.PO_ChangeOrder_Items(i).PO_Line And poChangeOrder.PO_ChangeOrder_Items(i).PO_Line <= pageLineTo Then
-                        lineIndex = poChangeOrder.PO_ChangeOrder_Items(i).PO_Line - pageLineFrom
-                        
-                        
-                        ' TODO: Check if PO_LINE_CANCEL_STATUS$1 == Active
-                        
-                        ' Determine the schedule index in the page by looking at the index for the schedule captions
-                        Dim webElemScheduleCaptions As SeleniumWrapper.WebElementCollection, webElem As SeleniumWrapper.WebElement
-                        Dim webElemScheduleCaptionId As String
-                        Set webElemScheduleCaptions = driver.findElementsByXPath(".//*[@id='ACE_PO_LINE_SHIP_SCROL$" & lineIndex & "']/descendant::*[contains(@id,'win0divPO_LINE_SHIP_SCHED_NBR')]/span")
-                        
-                        pageSchIndex = -1
-                        
-                        For Each webElem In webElemScheduleCaptions
-                            If CInt(webElem.Text) = poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule Then
-                                ' Extract schedule index from span ID (Example: PO_LINE_SHIP_SCHED_NBR$10)
-                                webElemScheduleCaptionId = webElem.getAttribute("id")
-                                pageSchIndex = CInt(Mid$(webElemScheduleCaptionId, InStr(1, webElemScheduleCaptionId, "$") + 1))
-                                Exit For
-                            End If
-                        Next webElem
-                        
-                        ' TODO: Check if pageSchIndex >= 0
-                        
-                        
-                        ' Expand Schedule
-                        'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$" & lineIndex & "', 0, 0, 'Expand Schedule Section', false, true);"
-                        'PeopleSoft_Page_WaitForProcessing driver
-                        
-                        ' Expand Distribution
-                        ' Click PO_PNLS_PB_EXPAND_PB$232$$0
-                         'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$232$$0', 0, 0, 'Expand Distribution Section', false, true);"
-                        'PeopleSoft_Page_WaitForProcessing driver
-                        
-                        
-                        ' Click PO_PNLS_WRK_CHANGE_SHIP$0 - TODO: Check if it exists
-                        driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_SHIP$" & pageSchIndex & "');" ' Fix for 2.9.1.1  due to PS upgrade
-                        'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_SHIP$" & pageSchIndex & "');"
-                        PeopleSoft_Page_WaitForProcessing driver
-                        
-                        
-                        driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
-        
-                        
-                        ' Note since 2.9.1.1,
-                        '<a id="PO_PNLS_WRK_Z_CHANGE_DIST$0" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_Z_CHANGE_DIST$0', false, true);" tabindex="893" name="PO_PNLS_WRK_Z_CHANGE_DIST$0">
-                        'a id="PO_PNLS_WRK_GOTO_SCHED_DTLS$0" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_SCHED_DTLS$0');" tabindex="584" name="PO_PNLS_WRK_GOTO_SCHED_DTLS$0">
-                        '<a id="PO_PNLS_WRK_GOTO_LINE_DTLS$2" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_LINE_DTLS$2');" tabindex="557" name="PO_PNLS_WRK_GOTO_LINE_DTLS$2">
-                        
-                       ' <a href="javascript:hAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_LINE', 0, 0, 'Create Line Change', false, true);" tabindex="16" id="PO_PNLS_WRK_CHANGE_LINE" name="PO_PNLS_WRK_CHANGE_LINE"><img border="0" title="Create Line Change" alt="Create Line Change" name="PO_PNLS_WRK_CHANGE_LINE$IMG" src="/cs/ps/cache/PS_DELTA_ICN_1.gif"></a>
-                        Dim tmp As String
-                        tmp = driver.findElementById("PO_LINE_DUE_DATE$" & (pageSchIndex)).getAttribute("disabled")
-                        
-                        If poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE > 0 Then
-                            PeopleSoft_Page_SetValidatedField driver, _
-                                ("PO_LINE_DUE_DATE$" & (pageSchIndex)), _
-                                Format(poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE, "mm/dd/yyyy"), _
-                                poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE_Result
-                                
-                            If poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
-                        End If
-                        
-                        numProcessed = numProcessed + 1
-                    End If
-                Next i
-                
-                
-            End If
-            
-            Debug.Print
-            
-            If pageLineTo < pageLineTotal And numProcessed < poChangeOrder.PO_ChangeOrder_ItemCount And Not isSinglePagePO Then
-                ' Next page
-                driver.findElementById("PO_SCR_NAV_WRK_NEXT_ITEM_BUTTON").Click
-                PeopleSoft_Page_WaitForProcessing driver
-                
-                'driver.runScript "javascript:hAction_win0(document.win0,'PO_SCR_NAV_WRK_NEXT_ITEM_BUTTON', 0, 0, '', false, true);"
-                
-                
-                PopupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-                
-                PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
-            End If
-        Loop Until pageLineTo = pageLineTotal Or isSinglePagePO
-        
-    
+    ' Santiy check: either default value was modified OR there is at least one change item. If not, then
+    ' do not continue as there is no action being taken
+    If modifyDefaults = False And validChangeOrderItemCount = 0 Then
+        poChangeOrder.HasError = True
+        poChangeOrder.GlobalError = "Invalid change order request: No PO defaults modified or valid change order items."
+        GoTo ChangeOrderFailed
     End If
-    ' ---------------------------------------------------------------
-    ' End - Process Change Orders for individual items/schedules
-    ' ---------------------------------------------------------------
     
+
+    If validChangeOrderItemCount > 0 Then
+        result = PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver, poChangeOrder)
+        If poChangeOrder.HasError Then GoTo ChangeOrderFailed
+    
+        ' Check for individual item failures:
+        For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+            If poChangeOrder.PO_ChangeOrder_Items(i).HasError Then GoTo ChangeOrderFailed
+            If poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
+        Next i
+    End If
+    
+    
+    ' TODO: Check if change made (e.g., due date was actually changed). Exit if not
     
     
     
     driver.findElementById("PO_KK_WRK_PB_BUDGET_CHECK").Click
-    
     PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
     
-    ' TODO: Check if change made (e.g., due date was actually changed)
     
-    ' Change to: <span class="PATRANSACTIONTITLE">Change Reason</span>
     If PeopleSoft_Page_ElementExists(driver, By.id("PO_CHNG_REASON_COMMENTS$0")) Then
         
         driver.findElementById("PO_CHNG_REASON_COMMENTS$0").Clear
@@ -2396,28 +2406,327 @@ Public Function PeopleSoft_PurchaseOrder_ProcessChangeOrder(ByRef session As Peo
         PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
     End If
     
-    PeopleSoft_PurchaseOrder_ProcessChangeOrder = True
+    PeopleSoft_ChangeOrder_Process = True
     Exit Function
     
 ValidationFail:
     poChangeOrder.HasError = True
     
 ChangeOrderFailed:
-    PeopleSoft_PurchaseOrder_ProcessChangeOrder = False
+    PeopleSoft_ChangeOrder_Process = False
+    PeopleSoft_SaveDebugInfo driver, "ChangeOrder"
     Exit Function
     
 ExceptionThrown:
-    
     poChangeOrder.HasError = True
     poChangeOrder.GlobalError = "Exception: " & Err.Description
     
-    PeopleSoft_PurchaseOrder_ProcessChangeOrder = False
+    PeopleSoft_ChangeOrder_Process = False
+    PeopleSoft_SaveDebugInfo driver, "ChangeOrder"
 
 End Function
+Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As PeopleSoft_PurchaseOrder_ChangeOrder) As Boolean
+
+    
+    Debug_Print "PeopleSoft_ChangeOrder_Process_PreCheck: Change Order (" & Debug_VarListString("PO ID", poChangeOrder.PO_ID, "PO DUE DATE", poChangeOrder.PO_DUE_DATE, "SendToVendor", poChangeOrder.PO_HDR_FLG_SEND_TO_VENDOR) & ")"
+    
+    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+        With poChangeOrder.PO_ChangeOrder_Items(i)
+            Debug_Print "PeopleSoft_ChangeOrder_Process_PreCheck: Change Order Item: (" & Debug_VarListString("PO Line", .PO_Line, "PO Schedule", .PO_Schedule, "SCH_DUE_DATE", .SCH_DUE_DATE) & ")"
+        End With
+    Next i
+    
+
+    Dim hasPoDefaultFieldChange As Boolean
+    Dim hasValidChangeOrderItem As Boolean
+    Dim anyItemHasErrors As Boolean
+    
+    hasPoDefaultFieldChange = False
+    hasValidChangeOrderItem = False
+    anyItemHasErrors = True = False
+    
+    If poChangeOrder.PO_DUE_DATE > 0 Then hasPoDefaultFieldChange = True
+
+    Dim i As Long
+    
+    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+        With poChangeOrder.PO_ChangeOrder_Items(i)
+            ' Valid change order line?
+            If .PO_Line > 0 Then
+                hasValidChangeOrderItem = True
+                
+                If .PO_Schedule < 1 Then
+                    .HasError = True
+                    .ItemError = .ItemError & "PO Schedule must be zero or greater" & vbCrLf
+                    anyItemHasErrors = True
+                End If
+                ' Does the line item have any changes?
+                If .SCH_DUE_DATE = 0 Then
+                    .HasError = True
+                    .ItemError = .ItemError & "Change Order Item does not specify any changes." & vbCrLf
+                    anyItemHasErrors = True
+                End If
+            End If
+        End With
+    Next i
+    
+    
+    If hasPoDefaultFieldChange = False And hasValidChangeOrderItem = False Then
+        poChangeOrder.HasError = True
+        poChangeOrder.GlobalError = "Change Order does not specify any changes. Set one or more change order fields."
+        GoTo PreCheckFailed
+    End If
+    
+    If anyItemHasErrors Then
+        poChangeOrder.HasError = True
+        poChangeOrder.GlobalError = "One or more change items have pre-check errors"
+        GoTo PreCheckFailed
+    End If
+    
+    PeopleSoft_ChangeOrder_Process_PreCheck = True
+    Exit Function
+    
+PreCheckFailed:
+    
+    PeopleSoft_ChangeOrder_Process_PreCheck = False
+
+End Function
+Private Function PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver As SeleniumWrapper.WebDriver, poChangeOrder As PeopleSoft_PurchaseOrder_ChangeOrder) As Boolean
+    ' Assume we are starting from the PO page
+    
+    If poChangeOrder.PO_ChangeOrder_ItemCount <= 0 Then
+        ' No items to process
+        PeopleSoft_ChangeOrder_ProcessLineScheduleItems = True
+        Exit Function
+    End If
+    
+    Dim By As New SeleniumWrapper.By
+    
+    Dim i As Long
+    Dim paginationText As String, posTo As Integer, posOf As Integer
+    Dim pageLineFrom As Integer, pageLineTo As Integer, pageLineTotal As Integer
+    Dim anyChangeOrderItemsOnPage As Boolean
+    
+    Dim isSinglePagePO As Boolean
+    Dim numProcessed As Integer
+    
+    Dim we As WebElement, weCollection As WebElementCollection
+    Dim weID As String
+    
+    Dim PO_ChangeOrder_ItemProcessedFlag() As Boolean
+    ReDim PO_ChangeOrder_ItemProcessedFlag(1 To poChangeOrder.PO_ChangeOrder_ItemCount) As Boolean
+   
+    isSinglePagePO = True
+    numProcessed = 0
+        
+    ' At a high level, the general approach taken is to loop through each PO page which consists of all the possible lines items
+    ' As we visit each page, we check to see if any of the change order items are on the current page
+    Do
+        anyChangeOrderItemsOnPage = False
+        
+        ' Find element with item count. Example: 1 to 75 of 77
+        If PeopleSoft_Page_ElementExists(driver, By.id("PO_SCR_NAV_WRK_SRCH_RSLT_MSG")) Then
+            isSinglePagePO = False
+        
+            ' Extract starting line # and last line #s on page
+            paginationText = driver.findElementById("PO_SCR_NAV_WRK_SRCH_RSLT_MSG").text
+        
+            posTo = InStr(1, paginationText, " to ")
+            posOf = InStr(1, paginationText, " of ")
+            
+            Debug.Assert posTo > 0
+            Debug.Assert posOf > 0
+            Debug.Assert posOf > posTo
+            
+            pageLineFrom = Mid(paginationText, 1, posTo - 1)
+            pageLineTo = Mid(paginationText, posTo + Len(" to "), posOf - posTo - Len(" to "))
+            pageLineTotal = Mid(paginationText, posOf + Len(" of "))
+            
+            ' Check to see if any of the change order lines items are on the page
+            anyChangeOrderItemsOnPage = False
+            
+            For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+                If pageLineFrom <= poChangeOrder.PO_ChangeOrder_Items(i).PO_Line And poChangeOrder.PO_ChangeOrder_Items(i).PO_Line <= pageLineTo Then
+                    anyChangeOrderItemsOnPage = True
+                    Exit For
+                End If
+            Next i
+        Else
+            pageLineFrom = 1
+            pageLineTo = 9999
+        End If
+        
+        ' ------------------------------
+        ' Begin - Multi-page Workaround
+        ' ------------------------------
+        ' For some reason, if the PO spans multiple pages, moving from the first page to the second does not work (the browser hangs).
+        ' Therefore, we can only process a change order for items on the first page. If any change order item
+        ' exists outside of the first page, an error will be thrown and the change order canceled.
+        ' This entire section can be removed after the issue is fixed.
+        If False Then
+            Dim anyLineEditsOutsideOfPage As Boolean: anyLineEditsOutsideOfPage = False
+            
+            For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+                If pageLineFrom > poChangeOrder.PO_ChangeOrder_Items(i).PO_Line Or poChangeOrder.PO_ChangeOrder_Items(i).PO_Line > pageLineTo Then
+                    anyLineEditsOutsideOfPage = True
+                    poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                    poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line exists outside of first PO page"
+                    Exit For
+                End If
+            Next i
+            
+            If anyLineEditsOutsideOfPage Then
+                poChangeOrder.HasError = True
+                poChangeOrder.GlobalError = "Change order needs to be performed manually: one or more lines exists outside of first PO page"
+            
+                GoTo ChangeOrderFailed
+            End If
+        End If
+        ' ------------------------------
+        '- End - Multi-page Workaround
+        ' ------------------------------
+        
+        
+        If anyChangeOrderItemsOnPage Or isSinglePagePO Then
+            Dim pageLineIndex As Integer, pageScheduleIndex As Integer
+            'Dim lineIndex As Integer
+            
+            pageLineIndex = -1 ' -1 = invalid value
+            pageScheduleIndex = -1   '-1 = invalid value
+            
+            
+            
+            ' Expand All Lines/Schedules
+            driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
+            PeopleSoft_Page_WaitForProcessing driver
+            
+            For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+                If pageLineFrom <= poChangeOrder.PO_ChangeOrder_Items(i).PO_Line And poChangeOrder.PO_ChangeOrder_Items(i).PO_Line <= pageLineTo Then
+                    pageLineIndex = poChangeOrder.PO_ChangeOrder_Items(i).PO_Line - pageLineFrom
+                    
+                    
+                    If pageLineIndex < 0 Then
+                        poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: calculated line index is invalid"
+                        
+                        GoTo ChangeOrderFailed
+                    End If
+                    
+                    
+                    Dim poLineStatus As String
+                    poLineStatus = driver.findElementById("PO_LINE_CANCEL_STATUS$" & pageLineIndex).text
+                    
+                    If poLineStatus <> "Active" Then
+                        poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line status is not active"
+                        
+                        GoTo ChangeOrderFailed
+                    End If
+                    
+                    ' Begin - Determine the schedule index in the page by looking at the index for the schedule captions
+                    ' Get elements which have the schedule ID
+                    Set weCollection = driver.findElementsByXPath(".//*[@id='ACE_PO_LINE_SHIP_SCROL$" & pageLineIndex & "']/descendant::span[starts-with(@id,'PO_LINE_SHIP_SCHED_NBR')]")
+                     
+                    pageScheduleIndex = -1
+                    
+                    For Each we In weCollection
+                        If Not IsNumeric(we.text) Then
+                            poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                            poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Unexpected error in page: Schedule element is not numeric. Value is: " & we.text
+                        End If
+                        
+                        If CInt(we.text) = poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule Then
+                            ' Extract schedule index from span ID (Example: PO_LINE_SHIP_SCHED_NBR$10) <--- extract the 10 at the end. This is our page schedule index
+                            weID = we.getAttribute("id")
+                            pageScheduleIndex = CInt(Mid$(weID, InStr(1, weID, "$") + 1))
+                            Exit For
+                        End If
+                    Next we
+                    
+                    
+                    If pageScheduleIndex < 0 Then
+                        poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line schedule does not exist or not displayed on page"
+                        
+                        GoTo ChangeOrderFailed
+                    End If
+                    
+                    
+                    ' Expand Schedule
+                    'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$" & lineIndex & "', 0, 0, 'Expand Schedule Section', false, true);"
+                    'PeopleSoft_Page_WaitForProcessing driver
+                    
+                    ' Expand Distribution
+                    ' Click PO_PNLS_PB_EXPAND_PB$232$$0
+                     'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_PB$232$$0', 0, 0, 'Expand Distribution Section', false, true);"
+                    'PeopleSoft_Page_WaitForProcessing driver
+                    
+                    
+                    
+                    'driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
+    
+                    
+                    ' Note since 2.9.1.1,
+                    '<a id="PO_PNLS_WRK_Z_CHANGE_DIST$0" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_Z_CHANGE_DIST$0', false, true);" tabindex="893" name="PO_PNLS_WRK_Z_CHANGE_DIST$0">
+                    'a id="PO_PNLS_WRK_GOTO_SCHED_DTLS$0" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_SCHED_DTLS$0');" tabindex="584" name="PO_PNLS_WRK_GOTO_SCHED_DTLS$0">
+                    '<a id="PO_PNLS_WRK_GOTO_LINE_DTLS$2" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_LINE_DTLS$2');" tabindex="557" name="PO_PNLS_WRK_GOTO_LINE_DTLS$2">
+                    
+                   ' <a href="javascript:hAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_LINE', 0, 0, 'Create Line Change', false, true);" tabindex="16" id="PO_PNLS_WRK_CHANGE_LINE" name="PO_PNLS_WRK_CHANGE_LINE"><img border="0" title="Create Line Change" alt="Create Line Change" name="PO_PNLS_WRK_CHANGE_LINE$IMG" src="/cs/ps/cache/PS_DELTA_ICN_1.gif"></a>
+                    Dim tmp As String
+                    tmp = driver.findElementById("PO_LINE_SHIP_DUE_DT$" & (pageScheduleIndex)).getAttribute("disabled")
+                    
+                    
+                    ' Click on change order triangle for this schedule
+                    driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_SHIP$" & pageScheduleIndex & "');" ' Fix for 2.9.1.1  due to PS upgrade
+                    PeopleSoft_Page_WaitForProcessing driver
+                    
+                    If poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE > 0 Then
+                        PeopleSoft_Page_SetValidatedField driver:=driver, fieldElementID:=("PO_LINE_SHIP_DUE_DT$" & pageScheduleIndex), _
+                            fieldValue:=Format(poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE, "mm/dd/yyyy"), validationResult:=poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE_Result, _
+                            expectedPopupContents:="*Due Date selected is a weekend or a public holiday*"
+                            
+                            
+                        If poChangeOrder.PO_ChangeOrder_Items(i).SCH_DUE_DATE_Result.ValidationFailed Then GoTo ChangeOrderFailed ' ValidationFail
+                    End If
+                    
+                    PO_ChangeOrder_ItemProcessedFlag(i) = True
+                    numProcessed = numProcessed + 1
+                End If
+            Next i
+            
+            
+        End If
+        
+        Debug.Print
+        
+        If pageLineTo < pageLineTotal And numProcessed < poChangeOrder.PO_ChangeOrder_ItemCount And Not isSinglePagePO Then
+            ' Next page
+            driver.findElementById("PO_SCR_NAV_WRK_NEXT_ITEM_BUTTON").Click
+            PeopleSoft_Page_WaitForProcessing driver
+            
+            
+            Dim popupText As String
+            popupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
+            
+            PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+        End If
+    Loop Until pageLineTo = pageLineTotal Or isSinglePagePO
+        
+    
+    
 
 
+    PeopleSoft_ChangeOrder_ProcessLineScheduleItems = True
+    Exit Function
+    
+ChangeOrderFailed:
+    PeopleSoft_ChangeOrder_ProcessLineScheduleItems = False
+
+End Function
 Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Session, ByRef rcpt As PeopleSoft_Receipt) As Boolean
 
+    
+    Debug_Print "PeopleSoft_Receipt_CreateReceipt called (" & Debug_VarListString("PO ID", rcpt.PO_ID, "Mode", IIf(rcpt.ReceiveMode = RECEIVE_SPECIFIED, "<SPECIFIED>", "<ALL>"), "ReceiptItemsCount", rcpt.ReceiptItemCount) & ")"
 
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
 
@@ -2687,10 +2996,18 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
 
     ' Receive on specific quantities
     If rcpt.ReceiveMode = RECEIVE_SPECIFIED Then
+        Debug_Print "PeopleSoft_Receipt_CreateReceipt: Receive specified mode -> Receive on specific quantities"
+    
         anyItemHasErrors = False
         
         For i = 1 To rcpt.ReceiptItemCount
             pageRcptLineIdx = mapReceiptItemsToPageReceiptLines(i)
+            
+            
+            Debug_Print "PeopleSoft_Receipt_CreateReceipt: Receipt Line #" & i & " (" & Debug_VarListString("HasError", rcpt.ReceiptItems(i).HasError, "Receivable", Not rcpt.ReceiptItems(i).IsNotReceivable, "pageRcptLineIdx", pageRcptLineIdx) & ")"
+            
+            Debug_Print "PeopleSoft_Receipt_CreateReceipt: PageReceiptLine Index #" & pageRcptLineIdx & " (" & Debug_VarListString("Accept Qty", pageReceiptLines(pageRcptLineIdx).Accept_Qty) & ")"
+            
             
             If rcpt.ReceiptItems(i).HasError = False And rcpt.ReceiptItems(i).IsNotReceivable = False Then
                 rcpt.ReceiptItems(i).Accept_Qty = pageReceiptLines(pageRcptLineIdx).Accept_Qty
@@ -2698,27 +3015,30 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
                 ' Check: receive quantity is less than accept qty
                 If rcpt.ReceiptItems(i).Receive_Qty > 0 Then ' Receipt qty specified
                     If rcpt.ReceiptItems(i).Receive_Qty > rcpt.ReceiptItems(i).Accept_Qty Then
+                        Debug_Print "PeopleSoft_Receipt_CreateReceipt: Receipt Line #" & i & ": Receive qty is greater than accepted qty (Accept Qty: " & rcpt.ReceiptItems(i).Accept_Qty & ")"
                         rcpt.ReceiptItems(i).HasError = True
                         rcpt.ReceiptItems(i).ItemError = "Receive qty is greater than accepted qty (Accept Qty: " & rcpt.ReceiptItems(i).Accept_Qty & ")"
                         anyItemHasErrors = True
                     End If
                 End If
                         
-                ' Second check passed
                 If rcpt.ReceiptItems(i).HasError = False Then
-                    If rcpt.ReceiptItems(i).Receive_Qty > 0 Then ' Receipt qty specified - otherwise receive all
+                     ' If Receipt qty specified -> receive on the specified amount, otherwise receive all
+                    If rcpt.ReceiptItems(i).Receive_Qty > 0 Then
                         Dim tmpValidationResult As PeopleSoft_Field_ValidationResult
                         
+                        ' Fill in Receive Qtr
                         PeopleSoft_Page_SetValidatedField driver, ("RECV_LN_SHIP_QTY_SH_RECVD$" & pageReceiptLines(pageRcptLineIdx).PageTableRowIndex), _
                             CStr(rcpt.ReceiptItems(i).Receive_Qty), tmpValidationResult
                         
                         If tmpValidationResult.ValidationFailed Then
+                            Debug_Print "PeopleSoft_Receipt_CreateReceipt: Receipt Line #" & i & ": RECEIVE QTY ERROR: " & tmpValidationResult.ValidationErrorText
                             rcpt.ReceiptItems(i).HasError = True
                             rcpt.ReceiptItems(i).ItemError = "RECEIVE QTY ERROR: " & tmpValidationResult.ValidationErrorText
                             anyItemHasErrors = True
                         End If
                     Else
-                        ' No receipt qty give. Receive on all and return the qty.
+                        ' No receipt qty given. Receive on all and return the qty.
                         rcpt.ReceiptItems(i).Receive_Qty = pageReceiptLines(pageRcptLineIdx).Receipt_Qty
                     End If
                 End If
@@ -2735,6 +3055,8 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
         
     End If
         
+        
+    ' Exit function <-- UNCOMMENT TO EXIT BEFORE Receiving
             
     ' Save Receipt
     'driver.findElementById("#ICSave").Click
@@ -2750,7 +3072,6 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
      
     Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
     
-    Debug.Print "Expecting Popup: Have these receipt quantities been checked for accuracy"
     
     popupCheckResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=False, _
         raiseErrorIfUnexpected:=False, expectedContent:="*Have these receipt quantities been checked for accuracy*")
@@ -2759,7 +3080,7 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
     If popupCheckResult.HasPopup = False Or (popupCheckResult.HasPopup And popupCheckResult.IsExpected = False) Then
         rcpt.HasGlobalError = True
         rcpt.GlobalError = "Did not receive expected popup: Have these receipt quantities been checked for accuracy?" _
-                            & IIf(popupCheckResult.HasPopup, vbCrLf & "Popup received: " & popupCheckResult.PopupText, "")
+                            & IIf(popupCheckResult.HasPopup, vbCrLf & "Popup received: " & popupCheckResult.popupText, "")
         
         GoTo ReceiptFailed
     End If
@@ -2776,7 +3097,7 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
     
     
     ' Check for receipt ID.
-    rcpt.RECEIPT_ID = driver.findElementById("RECV_HDR_RECEIVER_ID").Text
+    rcpt.RECEIPT_ID = driver.findElementById("RECV_HDR_RECEIVER_ID").text
     rcpt.RECEIPT_ID = Trim(rcpt.RECEIPT_ID)
     Debug.Print "Receipt ID: " & rcpt.RECEIPT_ID
     
@@ -2800,7 +3121,7 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
         
         If popupCheckResult.IsExpected = False Then
             popupCountCheck = popupCountCheck + 1
-            Debug.Print "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.PopupText
+            Debug.Print "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.popupText
             'rcpt.GlobalError = rcpt.GlobalError & "Popup Received after Receipt " & popupCountCheck & ": " & popupCheckResult.PopupText & vbCrLf
         
             PeopleSoft_Page_WaitForProcessing driver
@@ -2839,6 +3160,9 @@ CancelReceiptAndExit:
 ValidationFailed:
 ReceiptFailed:
     PeopleSoft_Receipt_CreateReceipt = False
+    
+    Debug_Print "PeopleSoft_Receipt_CreateReceipt: ERROR: " & rcpt.GlobalError
+    PeopleSoft_SaveDebugInfo driver, "Receipt"
     Exit Function
        
 ExceptionThrown:
@@ -2847,6 +3171,8 @@ ExceptionThrown:
     rcpt.HasGlobalError = True
     rcpt.GlobalError = "Exception: " & Err.Description
     
+    Debug_Print "PeopleSoft_Receipt_CreateReceipt: ERROR: " & rcpt.GlobalError
+    PeopleSoft_SaveDebugInfo driver, "Receipt"
 
 
 
@@ -2909,10 +3235,25 @@ Private Function PeopleSoft_Receipt_ExtractUnreceivedItemsFromPage(driver As Sel
     
     PeopleSoft_Receipt_ExtractUnreceivedItemsFromPage = unreceivedItemCount
     
+    Debug_Print "PeopleSoft_Receipt_ExtractUnreceivedItemsFromPage: Unreceived Items"
+    Debug_CM_Start 7
+    Debug_CM_PrintRow "Line", "Schedule", "Qty", "Item ID", "CATS Flag", "Description", "Chk Disabled"
+    
+    
     For rowIndex = 0 To numReturnedRows - 1
         Dim Row_CheckDisabled As String
       
         unreceivedItems(rowIndex + 1).PageTableRowIndex = rowIndex
+        
+        ' Print Debug Row
+        Debug_CM_Print 1, driver.executeScript("return document.getElementById('PO_PICK_ORD_WS_LINE_NBR$" & rowIndex & "').textContent;")
+        Debug_CM_Print 2, driver.executeScript("return document.getElementById('PO_PICK_ORD_WS_SCHED_NBR$" & rowIndex & "').textContent;")
+        Debug_CM_Print 3, driver.executeScript("return document.getElementById('QTY_PO$" & rowIndex & "').textContent;")
+        Debug_CM_Print 4, driver.executeScript("return document.getElementById('PO_PICK_ORD_WS_INV_ITEM_ID$" & rowIndex & "').textContent;")
+        Debug_CM_Print 5, driver.executeScript("return document.getElementById('PO_PICK_ORD_WRK_Z_IN_CATS_FLAG$" & rowIndex & "').textContent;")
+        Debug_CM_Print 6, driver.executeScript("return document.getElementById('PO_PICK_ORD_WS_DESCR254_MIXED$" & rowIndex & "').textContent;")
+        Debug_CM_Print 7, driver.executeScript("return document.getElementById('RECV_PO_SCHEDULE$" & rowIndex & "').disabled;")
+        
       
         ' workaround because driver.findElementById(X).Text doesn't always return a value and is very slow
         unreceivedItems(rowIndex + 1).PO_ID = driver.executeScript("return document.getElementById('PO_PICK_ORD_WS_PO_ID$" & rowIndex & "').textContent;")              'driver.findElementById("PO_PICK_ORD_WS_PO_ID$" & rowIndex).Text
@@ -2931,19 +3272,20 @@ Private Function PeopleSoft_Receipt_ExtractUnreceivedItemsFromPage(driver As Sel
         
     Next rowIndex
     
+    Debug_CM_EndFlush colSep:="|"
     
 
 End Function
 ' PeopleSoft_Receipt_ExtractReceiptItemsFromPage: Extracts all receipt items from PS Receipt page. Assumes we already navigated to page. Returns count but populated the paremeter pageReceiptItems
 Private Function PeopleSoft_Receipt_ExtractReceiptLinesFromPage(driver As SeleniumWrapper.WebDriver, ByRef pageReceiptLines() As PeopleSoft_ReceiptPage_ReceiptLine) As Long
 
+    
+    Debug_Print "PeopleSoft_Receipt_ExtractReceiptLinesFromPage called"
 
     Dim pageReceiptLineCount As Long
     
-    
     pageReceiptLineCount = 0
     PeopleSoft_Receipt_ExtractReceiptLinesFromPage = 0
-    
     
     ' Simulate "View All"
     driver.runScript "javascript:submitAction_win0(document.win0,'RECV_LN_SHIP$hviewall$0');"
@@ -2951,6 +3293,7 @@ Private Function PeopleSoft_Receipt_ExtractReceiptLinesFromPage(driver As Seleni
     
     
     pageReceiptLineCount = driver.getXpathCount(".//*[contains(@id,'ftrRECV_LN_SHIP$0_row')]")
+    Debug_Print "PeopleSoft_Receipt_ExtractReceiptLinesFromPage: Receipt Line Count: " & pageReceiptLineCount
     If pageReceiptLineCount = 0 Then Exit Function
     
     
@@ -2963,11 +3306,27 @@ Private Function PeopleSoft_Receipt_ExtractReceiptLinesFromPage(driver As Seleni
     
     
     Dim rowIndex As Integer
+    Dim pageItemContent As Variant
     
+    ' Print start of table
+    Debug_Print "PeopleSoft_Receipt_ExtractReceiptLinesFromPage: Receipt Lines"
+    Debug_CM_Start 8
+    Debug_CM_PrintRow "Rcpt Line", "Item ID", "PO Line", "PO Schedule", "Rcpt Qty", "Accept Qty", "Status", "Description"
     
     ' Note: We need to use javascript to get the element content/values since nothing is returned when items are not visible on the page
     For rowIndex = 0 To pageReceiptLineCount - 1
         pageReceiptLines(rowIndex + 1).PageTableRowIndex = rowIndex
+        
+        ' Print debug line
+        Debug_CM_Print 1, driver.executeScript("javascript: return document.getElementById('RECV_LN_NBR$" & rowIndex & "').textContent;")
+        Debug_CM_Print 2, driver.executeScript("javascript: return document.getElementById('INV_ITEM_ID$" & rowIndex & "').textContent;")
+        Debug_CM_Print 3, driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_LINE_NBR$" & rowIndex & "').textContent;")
+        Debug_CM_Print 4, driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_SCHED_NBR$" & rowIndex & "').textContent;")
+        Debug_CM_Print 5, driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_RECVD$" & rowIndex & "').value;")
+        Debug_CM_Print 6, driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_ACCPT$" & rowIndex & "').textContent;")
+        Debug_CM_Print 7, driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_RECV_SHIP_STATUS$" & rowIndex & "').textContent;")
+        Debug_CM_Print 8, driver.executeScript("javascript: return document.getElementById('DESCR$" & rowIndex & "').textContent;")
+        
         
         
         pageReceiptLines(rowIndex + 1).Receipt_Line = CInt(driver.executeScript("javascript: return document.getElementById('RECV_LN_NBR$" & rowIndex & "').textContent;"))
@@ -2976,15 +3335,20 @@ Private Function PeopleSoft_Receipt_ExtractReceiptLinesFromPage(driver As Seleni
         pageReceiptLines(rowIndex + 1).Description = driver.executeScript("javascript: return document.getElementById('DESCR$" & rowIndex & "').textContent;")
         pageReceiptLines(rowIndex + 1).Status = driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_RECV_SHIP_STATUS$" & rowIndex & "').textContent;")
         
-        pageReceiptLines(rowIndex + 1).Receipt_Price = CDec(driver.executeScript("javascript: return document.getElementById('PRICE_RECV$" & rowIndex & "').textContent;"))
-        pageReceiptLines(rowIndex + 1).Accept_Qty = CDec(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_ACCPT$" & rowIndex & "').textContent;"))
+        ' Fix: sometimes receipt price is blank: only set if it's available
+        pageItemContent = driver.executeScript("javascript: return document.getElementById('PRICE_RECV$" & rowIndex & "').textContent;")
+        If IsNumeric(pageItemContent) Then pageReceiptLines(rowIndex + 1).Receipt_Price = CCur(pageItemContent)
+        
+        
+        pageReceiptLines(rowIndex + 1).Receipt_Qty = CCur(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_RECVD$" & rowIndex & "').value;")) ' <-- note JS .value
+        pageReceiptLines(rowIndex + 1).Accept_Qty = CCur(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_ACCPT$" & rowIndex & "').textContent;"))
         
         pageReceiptLines(rowIndex + 1).PO_Line = CLng(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_LINE_NBR$" & rowIndex & "').textContent;"))
         pageReceiptLines(rowIndex + 1).PO_Schedule = CLng(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_SCHED_NBR$" & rowIndex & "').textContent;"))
         
-        pageReceiptLines(rowIndex + 1).Receipt_Qty = CDec(driver.executeScript("javascript: return document.getElementById('RECV_LN_SHIP_QTY_SH_RECVD$" & rowIndex & "').value;"))
     Next rowIndex
     
+    Debug_CM_EndFlush
     
     PeopleSoft_Receipt_ExtractReceiptLinesFromPage = pageReceiptLineCount
 
@@ -3064,7 +3428,7 @@ End Function
 Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session As PeopleSoft_Session, ByRef poRetryBC As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams) As Boolean
     
     
-    On Error GoTo ExceptionThrown
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
     
     Dim By As New By, Assert As New Assert, Verify As New Verify
@@ -3098,7 +3462,7 @@ Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session 
     
     ' Skip if PO is Dispatched or Approved.
     Dim poStatusText As String
-    poStatusText = driver.findElementById("PSXLATITEM_XLATSHORTNAME").Text
+    poStatusText = driver.findElementById("PSXLATITEM_XLATSHORTNAME").text
     
     If poStatusText = "Approved" Or poStatusText = "Dispatched" Then
         PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck = True
@@ -3131,7 +3495,7 @@ ExceptionThrown:
     PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck = False
     
     poRetryBC.HasGlobalError = True
-    poRetryBC.GlobalError = "Exception: " & Err.Description
+    poRetryBC.GlobalError = "PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck Exception: " & Err.Description
     
 
 
@@ -3141,9 +3505,12 @@ End Function
 
 Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrapper.WebDriver, ByVal fieldElementID As String, ByVal fieldValue As String, ByRef validationResult As PeopleSoft_Field_ValidationResult, Optional ignoreEmptyValues As Boolean = True, Optional expectedPopupContents As Variant) As Boolean
 
+    
+    Debug_Print "PeopleSoft_Page_SetValidatedField called (" & Debug_VarListString("fieldElementID", fieldElementID, "fieldValue", fieldValue) & ")"
+
+    
 
      
-    
     validationResult.ValidationFailed = False
     validationResult.ValidationErrorText = ""
 
@@ -3151,96 +3518,82 @@ Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrappe
         
     
     ' Dont bother if value is empty string or option to ignore empty values is false
-    If Len(fieldValue) > 0 Or ignoreEmptyValues = False Then
-        Dim elID As String, elVal As String
-        
-        'elID = fieldElement.getAttribute("id")
-        elID = Replace(fieldElementID, "'", "\'")
-        
-        elVal = driver.executeScript("return document.getElementById('" & elID & "').value;")
-        
-        'Dim tryNo As Integer
+    If Len(fieldValue) = 0 And ignoreEmptyValues Then
+        PeopleSoft_Page_SetValidatedField = True
+        Exit Function
+    End If
     
+    Dim elID As String, elVal As String, elDisabled As String
+    
+    elID = Replace(fieldElementID, "'", "\'")
+    
+    
+    elDisabled = driver.executeScript("return document.getElementById('" & elID & "').disabled;")
+    
+    If elDisabled <> "" Then
+        If CBool(elDisabled) = True Then
+            validationResult.ValidationFailed = True
+            validationResult.ValidationErrorText = "Element is disabled"
+            PeopleSoft_Page_SetValidatedField = True
+            Exit Function
+        End If
+    End If
+    
+    elVal = driver.executeScript("return document.getElementById('" & elID & "').value;")
+    
+
+    If fieldValue <> elVal Then
+        
         'tryNo = 1
         
-        
-        'Do
-
-        If fieldValue <> elVal Then
-            
-            'tryNo = 1
-            
-        
-            ' sanitize fieldValue
-            fieldValue = Replace(fieldValue, "'", "\'") ' escape quuotes
-            fieldValue = Replace(fieldValue, vbCrLf, "\n") ' replace new lines with newline character
-            fieldValue = Replace(fieldValue, vbCr, "\n") ' replace new lines with newline character
-            fieldValue = Replace(fieldValue, vbLf, "\n") ' replace new lines with newline character
-            
-            
-            
-            'fieldElement.Click
-            'fieldElement.Clear
-            driver.Wait 100
-            'fieldElement.SendKeys fieldValue
-            driver.runScript "javascript:document.getElementById('" & elID & "').value = '" & fieldValue & "';"
-        
-            
-                  
-      
-            ' Force field check
-            
-            driver.runScript "javascript:oChange_win0=document.getElementById('" & elID & "');addchg_win0(oChange_win0);submitAction_win0(oChange_win0.form,oChange_win0.name);"
-            'driver.runScript "javascript:oChange_win0=document.getElementById('" & elID & "');addchg_win0(oChange_win0);doFocus_win0(addchg_win0, true, true);"
-            'driver.runScript "javascript:addchg_win0(document.getElementById('" & elID & "'));oChange_win0=document.getElementById('" & elID & "');submitAction_win0(oChange_win0.form,oChange_win0.name);"
     
-            PeopleSoft_Page_WaitForProcessing driver
-            
-            
-            Dim popupResult As PeopleSoft_Page_PopupCheckResult
-            
-            driver.setImplicitWait 100 ' new in 2.11: override implicit wait (speeds up field entering)
-            
-            popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True, raiseErrorIfUnexpected:=False, expectedContent:=expectedPopupContents)
-            
-            driver.setImplicitWait TIMEOUT_IMPLICIT_WAIT ' new in 2.11: restore implicit wait
-            
-            If popupResult.HasPopup And popupResult.IsExpected = False Then
-                validationResult.ValidationErrorText = popupResult.PopupText
-                validationResult.ValidationFailed = True
-                
-                PeopleSoft_Page_SetValidatedField = False
-                Exit Function
-            End If
-            
-            
-            'fieldValResult.ValidationErrorText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-            'fieldValResult.ValidationFailed = fieldValResult.ValidationErrorText <> ""
-            
-            
-            
-            'driver.Wait 500
-    
-            'elVal = driver.executeScript("return document.getElementById('" & elID & "').value;")
-            
-            
-            'If tryNo >= 3 Then
-            '    validationResult.ValidationFailed = True
-            '    validationResult.ValidationErrorText = "Could not set value"
-            'End If
-            
-            
-            
+        ' sanitize fieldValue
+        fieldValue = Replace(fieldValue, "'", "\'") ' escape quuotes
+        fieldValue = Replace(fieldValue, vbCrLf, "\n") ' replace new lines with newline character
+        fieldValue = Replace(fieldValue, vbCr, "\n") ' replace new lines with newline character
+        fieldValue = Replace(fieldValue, vbLf, "\n") ' replace new lines with newline character
         
+        
+        
+        'fieldElement.Click
+        'fieldElement.Clear
+        driver.Wait 100
+        'fieldElement.SendKeys fieldValue
+        driver.runScript "javascript:document.getElementById('" & elID & "').value = '" & fieldValue & "';"
+    
+        
+              
+  
+        ' Force field check
+        driver.runScript "javascript:oChange_win0=document.getElementById('" & elID & "');addchg_win0(oChange_win0);submitAction_win0(oChange_win0.form,oChange_win0.name);"
+        'driver.runScript "javascript:oChange_win0=document.getElementById('" & elID & "');addchg_win0(oChange_win0);doFocus_win0(addchg_win0, true, true);"
+        'driver.runScript "javascript:addchg_win0(document.getElementById('" & elID & "'));oChange_win0=document.getElementById('" & elID & "');submitAction_win0(oChange_win0.form,oChange_win0.name);"
+        PeopleSoft_Page_WaitForProcessing driver
+        
+        
+        'driver.Wait 500
+        
+        Dim popupResult As PeopleSoft_Page_PopupCheckResult
+        
+        driver.setImplicitWait 100 ' new in 2.11: override implicit wait (speeds up field entering)
+        
+        popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True, raiseErrorIfUnexpected:=False, expectedContent:=expectedPopupContents)
+        
+        driver.setImplicitWait TIMEOUT_IMPLICIT_WAIT ' new in 2.11: restore implicit wait
+        
+        If popupResult.HasPopup And popupResult.IsExpected = False Then
+            validationResult.ValidationErrorText = popupResult.popupText
+            validationResult.ValidationFailed = True
+            
+            PeopleSoft_Page_SetValidatedField = False
+            Exit Function
         End If
+        
     
-            'tryNo = tryNo + 1
-        'Loop Until elVal <> ""
-
     End If
+
+
    
-   
-    
     PeopleSoft_Page_SetValidatedField = True
     Exit Function
     
@@ -3264,7 +3617,7 @@ Public Function PeopleSoft_PurchaseOrder_NewPO(poBU As String, buyerID As Long, 
 
 End Function
 ' Utility function to add a line to a PO structure with a single schedule.
-Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleSoft_PurchaseOrder, lineItemID As String, lineItemDesc As String, schQty As Variant, shipDueDate As Date, shipToId As Long, distBusinessUnit As String, distProjectCode As String, distActivityID As String, Optional locationID As Long = 0, Optional schPrice As Currency = 0)
+Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleSoft_PurchaseOrder, lineItemID As String, lineItemDesc As String, schQty As Currency, shipDueDate As Date, shipToId As Long, distBusinessUnit As String, distProjectCode As String, distActivityID As String, Optional locationID As Long = 0, Optional schPrice As Currency = 0)
 
     
     Dim PO_LineCount As Integer
@@ -3280,11 +3633,10 @@ Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleS
     
     purchaseOrder.PO_Lines(PO_LineCount).LineFields.PO_LINE_ITEM_ID = lineItemID
     purchaseOrder.PO_Lines(PO_LineCount).LineFields.PO_LINE_DESC = lineItemDesc
-    'purchaseOrder.PO_Lines(PO_LineCount).LineFields.PO_LINE_QTY = lineQty
     
     purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).ScheduleFields.DUE_DATE = shipDueDate
     purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).ScheduleFields.SHIPTO_ID = shipToId
-    purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).ScheduleFields.QTY = CDec(schQty)
+    purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).ScheduleFields.QTY = schQty
     purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).ScheduleFields.PRICE = schPrice
     purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).DistributionFields.BUSINESS_UNIT_PC = distBusinessUnit
     purchaseOrder.PO_Lines(PO_LineCount).Schedules(1).DistributionFields.PROJECT_CODE = distProjectCode
@@ -3296,7 +3648,10 @@ Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleS
 End Sub
 Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumWrapper.WebDriver, ByRef budgetCheckResult As PeopleSoft_PurchaseOrder_BudgetCheckResult) As Boolean
 
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck called"
+
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
 
 
     ' ---------------------------------------------------------------------
@@ -3313,61 +3668,67 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     
     
     driver.findElementById("PO_KK_WRK_PB_BUDGET_CHECK").Click
-    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG * 2 ' increase long timeout by a factor of 2 due to PS responsiveness
+    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
     
-    ' Acknowledge Popup with message: The below PO line schedules exist with $0.00 or blank pricing.
-    'if  below PO line schedules exist with $0.00 or blank pricing
-    popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True, expectedContent:="*below PO line schedules exist with $0.00 or blank pricing*")
-    
-    If popupResult.HasPopup And popupResult.IsExpected = False Then
-        budgetCheckResult.GlobalError = "Unexpected Popup: PopupText"
-        budgetCheckResult.HasGlobalError = True
+    ' Acknowledge/Take action with popups
+    Do
+        popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=False)
+        If popupResult.HasPopup = False Then Exit Do
         
-        PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
-        Exit Function
-    End If
+        If popupResult.popupText Like "*below PO line schedules exist with $0.00 or blank pricing*" Then
+            ' Acknowledge Popup with message: The below PO line schedules exist with $0.00 or blank pricing.
+            PeopleSoft_Page_AcknowledgePopup driver, popupResult, vbOK
+        ElseIf popupResult.popupText Like "*Vendor * requires a Valid Contract*" Then
+            ' Acknowlede popup with: Warning -- Vendor XXX requires a Valid Contract. Note: we will cancel the PO at this time.
+            PeopleSoft_Page_AcknowledgePopup driver, popupResult, vbOK
+            
+            budgetCheckResult.GlobalError = "Unexpected Popup: " & popupResult.popupText
+            budgetCheckResult.HasGlobalError = True
+            
+                
+            '  Acknowledge the popup and return the PO ID but with errors
+            ' If PO ID provided, then grab PO ID
+            If PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[starts-with(@id,'PO_HDR_PO_ID')]")) Then
+                Set wePOId = driver.findElementByXPath(".//*[starts-with(@id,'PO_HDR_PO_ID')]")
+                Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: Found PO_HDR_PO_ID field: " & Debug_VarListString(wePOId.getAttribute("id"), wePOId.text)
+                
+                If Len(wePOId.text) > 0 And wePOId.text <> "NEXT" Then
+                    budgetCheckResult.PO_ID = wePOId.text
+                    budgetCheckResult.GlobalError = "PO ID generated with unexpected popup: " & popupResult.popupText
+                End If
+            End If
+            
+            GoTo BudgetCheckFatalError
+        Else
+            ' Unexpected popup
+            budgetCheckResult.GlobalError = "Unexpected Popup: " & popupResult.popupText
+            budgetCheckResult.HasGlobalError = True
+    
+            GoTo BudgetCheckFatalError
+        End If
+    Loop
+    
+    If budgetCheckResult.HasGlobalError Then GoTo BudgetCheckFatalError
+    
     
     ' Begin - Deal with the new screen which asks about quantities in available excess
     If PeopleSoft_Page_ElementExists(driver, By.XPath(".//title[contains(text(),'Excess Available')]")) Then
-        'elemExists = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[contains(text(),'Excess Available')]"))
-        'elemExists = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[contains(text(),'The following equipment currently exists in Available Excess Inventory')]"))
-        'elemExists = PeopleSoft_Page_ElementExists(driver, By.id("Z_CAT_AVL_WRK_IGNORE_PB"))
-    
         driver.findElementById("Z_CAT_AVL_WRK_IGNORE_PB").Click
         driver.runScript "javascript: submitAction_win0(document.win0,'Z_CAT_AVL_WRK_IGNORE_PB');"
-        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG ' increase long timeout by a factor of 2 due to PS responsiveness
+        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
     End If
     ' End - Deal with the new screen which asks about quantities in available excess
     
     
     
-    ' Adaptation from Oscar Gonzale code
-    Dim field_result As PeopleSoft_Field_ValidationResult
-    
-    'driver.runScript "oParentWin.submitAction_win0(oParentWin.document.win0, '#ICOK');closeMsg(null,modId);" ' i think this clicks a popup???
-    'PeopleSoft_Page_WaitForProcessing driver
-    'PeopleSoft_Page_SetValidatedField driver, "Z_PO_RSN_CD_REASON_CD$0", "OVERAGE-3", field_result
-    'PeopleSoft_Page_WaitForProcessing driver
-    'PeopleSoft_Page_SetValidatedField driver, "Z_PO_RSN_CD_COMMENTS_254$0", "Price Change After Quote Issued", field_result
-    'PeopleSoft_Page_WaitForProcessing driver
-    'driver.findElementById("PO_PNLS_WRK_PB_OK$0").Click
-    'PeopleSoft_Page_WaitForProcessing driver
-    'driver.findElementById("Z_CAT_AVL_WRK_IGNORE_PB").Click
-    'PeopleSoft_Page_WaitForProcessing driver
-    'driver.findElementById("#ICCancel").Click
-    'PeopleSoft_Page_WaitForProcessing driver
-    'driver.findElementById("Z_E_QT_WRK_APPLY").Click
-    'PeopleSoft_Page_WaitForProcessing driver
-    
-    
+    ' Check for popup while savings again
     popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True)
     
     If popupResult.HasPopup Then ' Error while saving
-        budgetCheckResult.GlobalError = popupResult.PopupText
+        budgetCheckResult.GlobalError = popupResult.popupText
         budgetCheckResult.HasGlobalError = True
         
-        PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
-        Exit Function
+        GoTo BudgetCheckFatalError
     End If
     
     
@@ -3375,53 +3736,53 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     
     ' The PO ID will show up in one of two elements:
     '     Budget Check Failed -> Z_KK_ERR_WRK_PO_ID
-    '     Budget Check Pass -> PO_HDR_PO_ID$14$
+    '     Budget Check Pass -> PO_HDR_PO_ID*
     '
     ' We will check for both. In some cases, neither is available immediately
     ' so we need try a few times or error out.
-    Set swByPOId = By.id("Z_KK_ERR_WRK_PO_ID")
-    
     Dim elementExists_PO_ID_budgetCheckFailed As Boolean  ' Case: budget check failed
     Dim elementExists_PO_ID_budgetCheckPassed As Boolean  ' Case: budget check passed
     Dim tryNo As Integer
     
+    tryNo = 0
+    
     Do
-        tryNo = 0
+        tryNo = tryNo + 1
         
         elementExists_PO_ID_budgetCheckFailed = False
         elementExists_PO_ID_budgetCheckPassed = False
     
         elementExists_PO_ID_budgetCheckFailed = PeopleSoft_Page_ElementExists(driver, By.id("Z_KK_ERR_WRK_PO_ID"))
-        If elementExists_PO_ID_budgetCheckFailed = False Then elementExists_PO_ID_budgetCheckPassed = PeopleSoft_Page_ElementExists(driver, By.id("PO_HDR_PO_ID$14$"))
+        If elementExists_PO_ID_budgetCheckFailed = False Then elementExists_PO_ID_budgetCheckPassed = PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[starts-with(@id,'PO_HDR_PO_ID')]"))
         
-        tryNo = tryNo + 1
+        
+        Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: PO ID element exists (" & Debug_VarListString("tryNo", tryNo, "elementExists_PO_ID_budgetCheckPassed", elementExists_PO_ID_budgetCheckPassed, "budgetCheckFailed", elementExists_PO_ID_budgetCheckFailed) & ")"
     Loop Until elementExists_PO_ID_budgetCheckFailed Or elementExists_PO_ID_budgetCheckPassed Or tryNo = 3
     
     If elementExists_PO_ID_budgetCheckFailed = False And elementExists_PO_ID_budgetCheckPassed = False Then
         budgetCheckResult.GlobalError = "Could not find PO ID on page: manual check required"
         budgetCheckResult.HasGlobalError = True
         
-        PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
+        GoTo BudgetCheckFatalError
     End If
     
     If elementExists_PO_ID_budgetCheckPassed Then
         ' Budget check passed
-        Set wePOId = driver.findElementById("PO_HDR_PO_ID$14$") ' Fix for 2.9.1.1
+        Set wePOId = driver.findElementByXPath(".//*[starts-with(@id,'PO_HDR_PO_ID')]") 'driver.findElementByid("PO_HDR_PO_ID$14$")
         
-        If wePOId.Text = "NEXT" Then ' Error while saving
-            budgetCheckResult.GlobalError = "Unknown error - Invalid PO ID Generated: " & wePOId.Text
+        If wePOId.text = "NEXT" Then ' Error while saving
+            budgetCheckResult.GlobalError = "Unknown error - Invalid PO ID Generated: " & wePOId.text
             budgetCheckResult.HasGlobalError = True
             
-            PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
-            Exit Function
+            GoTo BudgetCheckFatalError
         Else
-            budgetCheckResult.PO_ID = wePOId.Text
+            budgetCheckResult.PO_ID = wePOId.text
         End If
     Else
         ' Budget check failed
         Set wePOId = driver.findElementById("Z_KK_ERR_WRK_PO_ID")
         
-        budgetCheckResult.PO_ID = wePOId.Text
+        budgetCheckResult.PO_ID = wePOId.text
         
         PeopleSoft_PurchaseOrder_BudgetCheckResult_ExtractFromPage driver, budgetCheckResult
     End If
@@ -3432,6 +3793,12 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     ' ---------------------------------------------------------------------
     ' End - Save w/ Budget Check
     ' ---------------------------------------------------------------------
+    
+    
+BudgetCheckFatalError:
+    budgetCheckResult.HasGlobalError = True
+    PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
+    Exit Function
     
 ExceptionThrown:
     PeopleSoft_PurchaseOrder_SaveWithBudgetCheck = False
@@ -3479,16 +3846,16 @@ Public Function PeopleSoft_PurchaseOrder_BudgetCheckResult_ExtractFromPage(drive
         PO_ErrorIndex = i - 1
         
         With budgetCheckResult.BudgetCheck_Errors.BudgetCheck_LineErrors(i)
-            .LINE_NBR = CInt(driver.findElementById("Z_KK_PO_ERR_VW_LINE_NBR$" & PO_ErrorIndex).Text)
-            .SCHED_NBR = CInt(driver.findElementById("Z_KK_PO_ERR_VW_SCHED_NBR$" & PO_ErrorIndex).Text)
-            .DISTRIB_LINE_NUM = CInt(driver.findElementById("Z_KK_PO_ERR_VW_DISTRIB_LINE_NUM$" & PO_ErrorIndex).Text)
-            .BUDGET_DT = driver.findElementById("Z_KK_PO_ERR_VW_BUDGET_DT$" & PO_ErrorIndex).Text
-            .BUSINESS_UNIT_PC = driver.findElementById("Z_KK_PO_ERR_VW_BUSINESS_UNIT_PC$" & PO_ErrorIndex).Text
-            .PROJECT_ID = driver.findElementById("Z_KK_PO_ERR_VW_PROJECT_ID$" & PO_ErrorIndex).Text
-            .LINE_AMOUNT = CurrencyFromString(driver.findElementById("Z_KK_PO_ERR_VW_MONETARY_AMOUNT$" & PO_ErrorIndex).Text)
-            .COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_COMMIT_AMT$" & PO_ErrorIndex).Text)
-            .NOT_COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_NOT_COMMIT_AMT$" & PO_ErrorIndex).Text)
-            .AVAIL_BUDGET_AMT = CurrencyFromString(driver.findElementById("Z_KK_PO_ERR_VW_Z_BUDGET_AMT$" & PO_ErrorIndex).Text)
+            .LINE_NBR = CInt(driver.findElementById("Z_KK_PO_ERR_VW_LINE_NBR$" & PO_ErrorIndex).text)
+            .SCHED_NBR = CInt(driver.findElementById("Z_KK_PO_ERR_VW_SCHED_NBR$" & PO_ErrorIndex).text)
+            .DISTRIB_LINE_NUM = CInt(driver.findElementById("Z_KK_PO_ERR_VW_DISTRIB_LINE_NUM$" & PO_ErrorIndex).text)
+            .BUDGET_DT = driver.findElementById("Z_KK_PO_ERR_VW_BUDGET_DT$" & PO_ErrorIndex).text
+            .BUSINESS_UNIT_PC = driver.findElementById("Z_KK_PO_ERR_VW_BUSINESS_UNIT_PC$" & PO_ErrorIndex).text
+            .PROJECT_ID = driver.findElementById("Z_KK_PO_ERR_VW_PROJECT_ID$" & PO_ErrorIndex).text
+            .LINE_AMOUNT = CurrencyFromString(driver.findElementById("Z_KK_PO_ERR_VW_MONETARY_AMOUNT$" & PO_ErrorIndex).text)
+            .COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_COMMIT_AMT$" & PO_ErrorIndex).text)
+            .NOT_COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_NOT_COMMIT_AMT$" & PO_ErrorIndex).text)
+            .AVAIL_BUDGET_AMT = CurrencyFromString(driver.findElementById("Z_KK_PO_ERR_VW_Z_BUDGET_AMT$" & PO_ErrorIndex).text)
         End With
     Next i
     ' End - Line Errors
@@ -3507,11 +3874,11 @@ Public Function PeopleSoft_PurchaseOrder_BudgetCheckResult_ExtractFromPage(drive
         PO_ErrorIndex = i - 1
         
         With budgetCheckResult.BudgetCheck_Errors.BudgetCheck_ProjectErrors(i)
-            .BUSINESS_UNIT_PC = driver.findElementById("Z_KK_PRJ_ERR_VW_BUSINESS_UNIT_PC$" & PO_ErrorIndex).Text
-            .PROJECT_ID = driver.findElementById("Z_KK_PRJ_ERR_VW_PROJECT_ID$" & PO_ErrorIndex).Text
-            .NOT_COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_NOT_COMMIT_AMT2$" & PO_ErrorIndex).Text)
-            .AVAIL_BUDGET_AMT = CurrencyFromString(driver.findElementById("Z_KK_PRJ_ERR_VW_Z_BUDGET_AMT$" & PO_ErrorIndex).Text)
-            .FUNDING_NEEDED = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_KK_BAL_AMT$" & PO_ErrorIndex).Text)
+            .BUSINESS_UNIT_PC = driver.findElementById("Z_KK_PRJ_ERR_VW_BUSINESS_UNIT_PC$" & PO_ErrorIndex).text
+            .PROJECT_ID = driver.findElementById("Z_KK_PRJ_ERR_VW_PROJECT_ID$" & PO_ErrorIndex).text
+            .NOT_COMMIT_AMT = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_NOT_COMMIT_AMT2$" & PO_ErrorIndex).text)
+            .AVAIL_BUDGET_AMT = CurrencyFromString(driver.findElementById("Z_KK_PRJ_ERR_VW_Z_BUDGET_AMT$" & PO_ErrorIndex).text)
+            .FUNDING_NEEDED = CurrencyFromString(driver.findElementById("Z_KK_ERR_WRK_Z_KK_BAL_AMT$" & PO_ErrorIndex).text)
         End With
     Next i
     ' End - Project Errors
@@ -3543,22 +3910,43 @@ ElementNotFoundOrError:
     
 
 End Function
-Private Function PeopleSoft_Page_GetElementText(driver As SeleniumWrapper.WebDriver, ByVal elementID As String) As Variant
+Private Function PeopleSoft_Page_GetElementText(driver As SeleniumWrapper.WebDriver, ByVal elementID As String, Optional ByVal default As Variant) As Variant
 
+    Dim text As Variant
+    
     elementID = Replace(elementID, "'", "\'")
 
-    PeopleSoft_Page_GetElementText = driver.executeScript("return document.getElementById('" & elementID & "').textContent;")
+    text = driver.executeScript("return document.getElementById('" & elementID & "').textContent;")
+    
+    PeopleSoft_Page_GetElementText = text
+    
+    If Not IsMissing(default) Then
+        If Not text <> "" Then
+            PeopleSoft_Page_GetElementText = default
+        End If
+    End If
+    
 
 End Function
-Private Function PeopleSoft_Page_GetElementValue(driver As SeleniumWrapper.WebDriver, ByVal elementID As String) As Variant
+Private Function PeopleSoft_Page_GetInputElementValue(driver As SeleniumWrapper.WebDriver, ByVal elementID As String, Optional ByVal default As Variant) As Variant
 
+    Dim text As Variant
+    
     elementID = Replace(elementID, "'", "\'")
 
-    PeopleSoft_Page_GetElementValue = driver.executeScript("return document.getElementById('" & elementID & "').value;")
+    text = driver.executeScript("return document.getElementById('" & elementID & "').value;")
+    
+    PeopleSoft_Page_GetInputElementValue = text
+    
+    If Not IsMissing(default) Then
+        If Not text <> "" Then
+            PeopleSoft_Page_GetInputElementValue = default
+        End If
+    End If
 
 End Function
 
-Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver, Optional timeout_s As Long = 60)
+Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver, Optional timeout_s As Long = 60, Optional waitForLoader As Boolean = False)
 
     
     Const POLL_INTERVAL_MS As Double = 500 ' 0.5 s
@@ -3566,11 +3954,31 @@ Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver
     Dim iter As Integer
     Dim loader_inProcess As Boolean, proc_visibility As Variant
     
+    
     Dim MAX_ITER As Double
     
     MAX_ITER = timeout_s * 1000 / POLL_INTERVAL_MS
     
     iter = 0
+    
+    
+    ' If waitForLoader is set -> wait for page loader to exist before the next step
+    If waitForLoader Then
+        Do
+            loader_inProcess = driver.executeScript("return (loader != null);")
+            If loader_inProcess Then Exit Do
+            
+            driver.Wait POLL_INTERVAL_MS
+        
+            DoEvents
+            iter = iter + 1
+        Loop Until iter > MAX_ITER Or loader_inProcess
+        
+    
+        If iter > MAX_ITER Then
+            Err.Raise 513, , "PeopleSoft_Page_WaitForProcessing Timeout during waitForLoader"
+        End If
+    End If
     
     ' Processing is over when two actions happen (for good measure, both must occur):
     '   (1) The processing icon is no longer visible
@@ -3607,6 +4015,7 @@ Public Function PeopleSoft_Page_CheckForModal(driver As SeleniumWrapper.WebDrive
     Set wePopupModals = driver.findElementsByXPath(".//*[starts-with(@id,'ptMod_')]", 100)
     
     If wePopupModals.Count = 0 Then
+        Debug_Print "PeopleSoft_Page_CheckForModal: modal window not found"
         PeopleSoft_Page_CheckForModal = -1
         Exit Function
     End If
@@ -3618,20 +4027,28 @@ Public Function PeopleSoft_Page_CheckForModal(driver As SeleniumWrapper.WebDrive
     modalIndexStr = Right$(elemID, Len(elemID) - Len("ptMod_"))
     
     If Not IsNumeric(modalIndexStr) Then
+        Debug_Print "PeopleSoft_Page_CheckForModal: error occurred when parsing modal element ID '" & elemID & "'"
         PeopleSoft_Page_CheckForModal = -2
         Exit Function
     End If
     
     PeopleSoft_Page_CheckForModal = CLng(modalIndexStr)
+    
+    Debug_Print "PeopleSoft_Page_CheckForModal: modal window found (index=" & modalIndexStr & ")"
         
     Exit Function
     
 NotFoundOrErr:
+    Debug_Print "PeopleSoft_Page_CheckForModal: error occurred"
     PeopleSoft_Page_CheckForModal = -2
     
 
 End Function
 Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDriver, Optional acknowledgePopup As Boolean = False, Optional raiseErrorIfUnexpected As Boolean = True, Optional expectedContent As Variant) As PeopleSoft_Page_PopupCheckResult
+
+    
+    Debug_Print "PeopleSoft_Page_CheckForPopup called (" & Debug_VarListString("acknowledgePopup", acknowledgePopup, "raiseErrorIfUnexpected", raiseErrorIfUnexpected, "expectedContent (is provided)", Not IsMissing(expectedContent)) & ")"
+
 
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo PopupNotFoundOrErr
     
@@ -3645,8 +4062,6 @@ Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDrive
     Dim we As SeleniumWrapper.WebElement, By As New SeleniumWrapper.By
     Dim wePopupModals As WebElementCollection
     
-    Dim t0 As Double
-    t0 = Timer
     
     Set wePopupModals = driver.findElementsByXPath(".//*[contains(@id,'ptModContent_')]", 100)
     
@@ -3680,7 +4095,7 @@ Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDrive
     
     ' Get alert text
     Set we = driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='alertmsg']/span")
-    popupCheckResult.PopupText = we.Text
+    popupCheckResult.popupText = we.text
     
     
     
@@ -3701,7 +4116,7 @@ Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDrive
         expectedDebugStr = "'" & Join(expectedPatterns, "','" & "'")
         
         For Each expectedPattern In expectedPatterns
-            If popupCheckResult.PopupText Like CStr(expectedPattern) Then
+            If popupCheckResult.popupText Like CStr(expectedPattern) Then
                 popupCheckResult.IsExpected = True
                 Exit For
             End If
@@ -3709,13 +4124,13 @@ Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDrive
     End If
         
     
-    Debug.Print "PeopleSoft_Page_CheckForPopup: ID='" & popupCheckResult.PopupElementID & "', Expected=" & popupCheckResult.IsExpected & ", " _
+    Debug_Print "PeopleSoft_Page_CheckForPopup: ID='" & popupCheckResult.PopupElementID & "', Expected=" & popupCheckResult.IsExpected & ", " _
                 & "Buttons=(" & IIf(popupCheckResult.HasButtonYes, "Yes", "") & IIf(popupCheckResult.HasButtonNo, "|No", "") & IIf(popupCheckResult.HasButtonOk, "|OK", "") & IIf(popupCheckResult.HasButtonCancel, "|Cancel", "") & "), " _
-                & "Text='" & popupCheckResult.PopupText & "', ExpectedContents=" & expectedDebugStr & ""
+                & "Text='" & popupCheckResult.popupText & "', ExpectedContents=" & expectedDebugStr & ""
     
     If raiseErrorIfUnexpected And Not IsMissing(expectedContent) And popupCheckResult.IsExpected = False Then
         On Error GoTo 0
-        Err.Raise -1, , "Unexpected Popup: " & popupCheckResult.PopupText
+        Err.Raise -1, , "Unexpected Popup: " & popupCheckResult.popupText
         On Error GoTo PopupNotFoundOrErr
     End If
 
@@ -3741,16 +4156,20 @@ Public Function PeopleSoft_Page_CheckForPopup(driver As SeleniumWrapper.WebDrive
 PopupNotFoundOrErr:
     popupCheckResult.HasPopup = False
     popupCheckResult.PopupElementID = ""
-    popupCheckResult.PopupText = ""
+    popupCheckResult.popupText = ""
     
     PeopleSoft_Page_CheckForPopup = popupCheckResult
     
-    Debug.Print "PeopleSoft_Page_CheckForPopup: No popup found or error: " & Err.Description
+    Debug_Print "PeopleSoft_Page_CheckForPopup: No popup found or error: " & Err.Description
 
 End Function
 Public Sub PeopleSoft_Page_AcknowledgePopup(driver As SeleniumWrapper.WebDriver, ByRef popupCheckResult As PeopleSoft_Page_PopupCheckResult, clickButton As VbMsgBoxResult)
     
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    
+    Debug_Print "PeopleSoft_Page_AcknowledgePopup called"
+    
+    
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
     If clickButton = vbOK Then
         driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICOK']").Click
@@ -3773,21 +4192,22 @@ End Sub
 ' PeopleSoft_Page_SuppressPopup: Wrapper function to acknowledge popup and return only the text. This is deprecated but retained for backward compatibility. Use PeopleSoft_Page_CheckForPopup instead
 Public Function PeopleSoft_Page_SuppressPopup(driver As SeleniumWrapper.WebDriver, clickButton As VbMsgBoxResult, Optional matchText As String = "") As String
 
+    Debug_Print "PeopleSoft_Page_SuppressPopup called (redirecting to PeopleSoft_Page_CheckForPopup)"
+    
     Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
 
-
-    If DEBUG_OPTIONS.AddFunctionNameToExceptions Then On Error GoTo ExceptionThrown
+    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
 
     popupCheckResult = PeopleSoft_Page_CheckForPopup(driver)
     If popupCheckResult.HasPopup = False Then Exit Function
     
-    PeopleSoft_Page_SuppressPopup = popupCheckResult.PopupText
+    PeopleSoft_Page_SuppressPopup = popupCheckResult.popupText
     
     If matchText <> "" Then
-        If Not popupCheckResult.PopupText Like matchText Then
+        If Not popupCheckResult.popupText Like matchText Then
             Debug.Print "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match '" & matchText & "'"
-            Err.Raise -1, , "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match." & vbCrLf & "Popup Text: " & popupCheckResult.PopupText & vbCrLf & "Match: " & matchText & ""
+            Err.Raise -1, , "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match." & vbCrLf & "Popup Text: " & popupCheckResult.popupText & vbCrLf & "Match: " & matchText & ""
             Exit Function
         End If
     End If
