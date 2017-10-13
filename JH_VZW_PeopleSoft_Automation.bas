@@ -17,6 +17,27 @@ Option Explicit
 ' ------------------------------------------------------------------------------------------------------------------
 ' Changelog:
 '
+' 2.11.1
+'   2017-10-13 (joe h)
+'                         - Added PreCheck for all automation procedures to pre-validate fields
+'                         - Add debug mode option to quit before saving (stops processing before making final changes to PO/Receipt/Etc..)
+'                         - Added functions PeopleSoft_PurchaseOrder_NewPO, PeopleSoft_PurchaseOrder_NewLine, PeopleSoft_PurchaseOrder_NewSchedule
+'                         - Renamed PeopleSoft_PurchaseOrder_AddLineSimple -> PeopleSoft_PurchaseOrder_NewSimpleLine
+'                         - PeopleSoft_Page_SuppressPopup: Removed (deprecated)
+'                         - PeopleSoft_Page_WaitForProcessing: Added infinite timeout option
+'                         - PeopleSoft_Page_CheckForPopup/PeopleSoft_Page_Acknowledge: Added pass through acknowledgeTimeout option
+'                         - PO Create: Added infinite timeout time after saving with budget check
+'                         - PO CreateFromQuote: Added ItemError to line modifications
+'                         - PO Change Order: Allow changing individual line/schedules
+'                         - PO Change Order: Added infinite timeout time after saving change reason
+'                         - PO Change Order: Added check for popup after saving change reason
+'                         - PO Change Order: Added Line Status of Open as valid before moving forward with change order.
+'                         - Retry Budget Check: Added validated field PO ID
+'                         - Removed PO_Defaults from PO structure (not needed)
+'                         - PO Fields are now validated fields: PO_REF, QUOTE, XPRESS_BID_ID
+'                         - PO Budget Check, Receipt, and ChangeOrder fields are now validated: PO BU, PO ID
+'                         - PO Create now returns fields: PROJECT DESC
+'                         - Added PeopleSoft_SetDebugOutputOptions to add file prefix
 ' 2.11.0
 '   2017-10-03 (joe h)    - PO Change Order: Exits with error if PO defaults nor line item changed (modifyDefault=False and no valid line items)
 '                         - PO Create from Quote: Add Retry Save with Budget Check
@@ -86,10 +107,6 @@ Option Explicit
 ' Feature Requests & TODO:
 '   - PO Change Order: Allow adjusting by each line
 '   - PO Create: Add option to provide approval justification comments
-'   - PO Create: Fill xPress Bid Field ID field
-'   - PO Create eQuote: Ignores spaces before/after eQuote # match checked
-'   - Convert all Qty data types to Currency
-'
 
 ' ------------------------------------------------
 ' General
@@ -145,7 +162,6 @@ Type PeopleSoft_PurchaseOrder_Fields
     PO_HDR_PO_REF As String  ' NOTE: MAX LENGTH: 30 CHARS
     PO_HDR_COMMENTS As String
     PO_HDR_QUOTE As String
-    
     PO_HDR_XPRESS_BID_ID As String
     
     Quote_Attachment_FilePath As String
@@ -157,6 +173,10 @@ Type PeopleSoft_PurchaseOrder_Fields
     PO_HDR_VENDOR_LOCATION_Result As PeopleSoft_Field_ValidationResult
     PO_HDR_BUYER_ID_Result As PeopleSoft_Field_ValidationResult
     'PO_HDR_APPROVER_ID_Result As PeopleSoft_Field_ValidationResult
+    
+    PO_HDR_PO_REF_Result As PeopleSoft_Field_ValidationResult
+    PO_HDR_QUOTE_Result As PeopleSoft_Field_ValidationResult
+    PO_HDR_XPRESS_BID_ID_Result As PeopleSoft_Field_ValidationResult
     
     Quote_Attachment_FilePath_Result As PeopleSoft_Field_ValidationResult
     
@@ -207,6 +227,10 @@ Type PeopleSoft_PurchaseOrder_PO_Defaults
     DIST_EXP_SHIP_TO_ID As Long
     DIST_EXP_LOCATION_ID As Long
     
+    ' Return only fields
+    DIST_CAP_PROJECT_DESC As String
+    DIST_EXP_PROJECT_DESC As String
+    
     SCH_DUE_DATE_Result As PeopleSoft_Field_ValidationResult
     
     DIST_CAP_BUSINESS_UNIT_PC_Result As PeopleSoft_Field_ValidationResult
@@ -229,6 +253,9 @@ Type PeopleSoft_PurchaseOrder_Distribution_Fields
     PROJECT_CODE As String
     ACTIVITY_ID As String
     LOCATION_ID As Long
+    
+    ' PSoft Return Only
+    PROJECT_DESC As String
     
     ' Field Validation Results
     BUSINESS_UNIT_PC_Result As PeopleSoft_Field_ValidationResult
@@ -303,7 +330,7 @@ Type PeopleSoft_PurchaseOrder
     PO_LineCount As Integer
     
     
-    PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults
+    'PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults
     
     HasError As Boolean
     GlobalError As String
@@ -318,7 +345,7 @@ End Type
 ' ------------------------------------------------
 Type PeopleSoft_PurchaseOrder_CreateFromQuote_LineModification
     PO_Line As Integer
-    'PO_Schedule as integer
+    
     
     PO_LINE_ITEM_ID As String
     PO_LINE_DESC As String
@@ -342,11 +369,12 @@ Type PeopleSoft_PurchaseOrder_CreateFromQuote_LineModification
     DIST_LOCATION_ID_Result As PeopleSoft_Field_ValidationResult
     
     HasValidationError As Boolean
+    ItemError As String
 End Type
 
 Type PeopleSoft_PurchaseOrder_CreateFromQuoteParams
     PO_ID As String
-    
+
     E_QUOTE_NBR As String
     E_QUOTE_NBR_Result As PeopleSoft_Field_ValidationResult
 
@@ -390,6 +418,9 @@ End Type
 Type PeopleSoft_PurchaseOrder_ChangeOrder
     PO_BU As String
     PO_ID As String
+    
+    PO_BU_Result As PeopleSoft_Field_ValidationResult
+    PO_ID_Result As PeopleSoft_Field_ValidationResult
     
     ' PO Defaults
     PO_DUE_DATE As Date
@@ -451,6 +482,7 @@ Type PeopleSoft_Receipt
     PO_ID As String
     
     PO_BU_Result As PeopleSoft_Field_ValidationResult
+    PO_ID_Result As PeopleSoft_Field_ValidationResult
     
     RECEIPT_ID As String
     
@@ -507,6 +539,7 @@ Type PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams
     PO_ID As String
     
     PO_BU_Result As PeopleSoft_Field_ValidationResult
+    PO_ID_Result As PeopleSoft_Field_ValidationResult
     
     BudgetCheck_Result As PeopleSoft_PurchaseOrder_BudgetCheckResult
     
@@ -517,12 +550,12 @@ End Type
 ' Constants
 ' ------------------------------------------------
 Private Const URI_BASE As String = "https://erpprd-fnprd.erp.vzwcorp.com/"
-'Private Const PS_URI_LOGIN As String = "https://erpprd-fnprd.erp.vzwcorp.com/psc/ps/EMPLOYEE/ERP/c/MANAGE_PURCHASE_ORDERS.PURCHASE_ORDER_EXP.GBL" ' We can use PS page
 Private Const PS_URI_LOGIN As String = "https://websso.vzwcorp.com/siteminderagent/forms/vzwsso/sso_login.asp?TARGET=https://websso.vzwcorp.com/profileChk/chkProfile.asp?Orig_Trgt=HTTPS%3a%2f%2ferpprd-fnprd%2eerp%2evzwcorp%2ecom%2fpsp%2fps%2fEMPLOYEE%2fERP%2fh%2f%3ftab%3dDEFAULT"
 Private Const PS_URI_PO_EXPRESS As String = "https://erpprd-fnprd.erp.vzwcorp.com/psc/ps/EMPLOYEE/ERP/c/MANAGE_PURCHASE_ORDERS.PURCHASE_ORDER_EXP.GBL"
 Private Const PS_URI_RECEIPT_ADD As String = "https://erpprd-fnprd.erp.vzwcorp.com/psc/ps/EMPLOYEE/ERP/c/MANAGE_SHIPMENTS.RECV_PO.GBL"
 
-Private Const TIMEOUT_LONG = 60 * 5 ' 5min (seconds)
+Private Const TIMEOUT_INFINITE = -1 ' Use for Unlimited
+Private Const TIMEOUT_LONG = 60 * 10 ' 10min (seconds)
 Private Const TIMEOUT_IMPLICIT_WAIT = 3000 ' 3 seconds (milliseconds)
 
 ' ------------------------------------------------
@@ -531,14 +564,16 @@ Private Const TIMEOUT_IMPLICIT_WAIT = 3000 ' 3 seconds (milliseconds)
 Private Type PeopleSoft_Debug_Options
     InitFlag As Boolean
 
-    CaptureExceptions As Boolean
-    AddMethodNamePrefixToExceptions As Boolean
+    CaptureExceptions As Boolean                     ' Raised errors/exceptions are captured and returned as errors (keeps flow going)
+    AddMethodNamePrefixToExceptions As Boolean       ' Prefix local function name to errors
     
-    QuitBeforeSaving As Boolean
+    QuitBeforeSave As Boolean                        ' Quit PS automation before making final changes (useful for testing)
     
-    SaveDebugInfo_WriteDebugOutputToFile As Boolean
-    SaveDebugInfo_WriteSrcToFile As Boolean
-    SaveDebugInfo_TakeScreenShot As Boolean
+    SaveDebugInfo_WriteDebugOutputToFile As Boolean  ' Save Debug_Print() output to file
+    SaveDebugInfo_WriteSrcToFile As Boolean          ' Save WebDriver page HTML source to file
+    SaveDebugInfo_TakeScreenShot As Boolean          ' Save WebDriver screenshot to file
+    
+    SaveDebugInfo_FilePrefix As String               ' Prefix of file to be used
 End Type
 
 Private DEBUG_OPTIONS As PeopleSoft_Debug_Options
@@ -553,7 +588,7 @@ Public Function GetSeleniumVersion() As String
 
 End Function
 Public Sub PeopleSoft_SetConfigOptions(Optional captureExceptionsAsError As Boolean = False, Optional addMethodNamesToExceptions As Boolean = False, _
-    Optional writeDebugOutputToFile As Boolean = False, Optional writePageSrcToFile As Boolean = False, Optional takeScreenShot As Boolean = False)
+    Optional writeDebugOutputToFile As Boolean = False, Optional writePageSrcToFile As Boolean = False, Optional takeScreenShot As Boolean = False, Optional quitAutomationBeforeSave As Boolean = False)
     
    
     DEBUG_OPTIONS.InitFlag = True
@@ -564,15 +599,25 @@ Public Sub PeopleSoft_SetConfigOptions(Optional captureExceptionsAsError As Bool
     DEBUG_OPTIONS.SaveDebugInfo_WriteDebugOutputToFile = writeDebugOutputToFile
     DEBUG_OPTIONS.SaveDebugInfo_WriteSrcToFile = writePageSrcToFile
     DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot = takeScreenShot
+    
+    DEBUG_OPTIONS.QuitBeforeSave = quitAutomationBeforeSave
 
 End Sub
-Private Sub PeopleSoft_SaveDebugInfo(driver As SeleniumWrapper.WebDriver, Optional prefix As String)
+Public Sub PeopleSoft_SetDebugOutputOptions(Optional filePrefix As String)
+    
+    If IsMissing(filePrefix) = False Then
+        DEBUG_OPTIONS.SaveDebugInfo_FilePrefix = filePrefix
+    End If
+End Sub
+Private Sub PeopleSoft_SaveDebugInfo(driver As SeleniumWrapper.WebDriver)
 
     Dim dirPath As String
     Dim fileNamePrefix As String, fileHandle As Long
     
     dirPath = ThisWorkbook.Path & "\"
-    fileNamePrefix = dirPath & IIf(prefix <> "", prefix & "_", "") & "PS_" & Format$(Now(), "YYYYmmddHhmmSs")
+    fileNamePrefix = dirPath & _
+                        IIf(Len(DEBUG_OPTIONS.SaveDebugInfo_FilePrefix) > 0, DEBUG_OPTIONS.SaveDebugInfo_FilePrefix, "") & _
+                        "PS_" & Format$(Now(), "YYYYmmddHhmmSs")
     
     Debug_Print "PeopleSoft_SaveDebugInfo: Generating debug info files with prefix: " & fileNamePrefix
     
@@ -589,7 +634,23 @@ Private Sub PeopleSoft_SaveDebugInfo(driver As SeleniumWrapper.WebDriver, Option
     If DEBUG_OPTIONS.SaveDebugInfo_TakeScreenShot Then driver.captureEntirePageScreenshot fileNamePrefix & "_SS.png"
 
 End Sub
+' Utility function to check if a field value has multiple lines and sets validation result accordingly
+Private Function PeopleSoft_ValidateField_IsSingleLine(fieldName As String, fieldVal As String, ByRef validationResult As PeopleSoft_Field_ValidationResult) As Boolean
 
+    
+    If Len(fieldVal) > 0 Then
+        If InStr(1, fieldVal, vbCr) > 0 Or InStr(1, fieldVal, vbLf) > 0 Then
+            validationResult.ValidationErrorText = fieldName & " does not allow multiple lines as input"
+            validationResult.ValidationFailed = True
+            
+            PeopleSoft_ValidateField_IsSingleLine = False
+            Exit Function
+        End If
+    End If
+    
+    PeopleSoft_ValidateField_IsSingleLine = True
+
+End Function
 
 ' -----------------------------------------------------------------------------------------------
 Public Function PeopleSoft_NewSession(user As String, pass As String) As PeopleSoft_Session
@@ -830,17 +891,11 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
 
 
-    ' Begin - Precheck
-    If purchaseOrder.PO_LineCount < 1 Then
-        purchaseOrder.GlobalError = "PeopleSoft_PurchaseOrder_CutPO: One or more PO lines must be specified"
-        purchaseOrder.HasError = True
-    End If
-    
-    If purchaseOrder.HasError = True Then
+    ' Pre-Check
+    If PeopleSoft_PurchaseOrder_CutPO_PreCheck(purchaseOrder) = False Then
         PeopleSoft_PurchaseOrder_CutPO = False
         Exit Function
     End If
-    ' End - Precheck
 
     Dim driver As SeleniumWrapper.WebDriver
 
@@ -914,12 +969,8 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     
     
     If Len(purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID) > 0 Then
-        'driver.findElementById("PO_HDR_Z_XPRESS_BID_ID").Clear
-        'driver.findElementById("PO_HDR_Z_XPRESS_BID_ID").SendKeys purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID
-        
-        Dim validationResult As PeopleSoft_Field_ValidationResult
-        PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_Z_XPRESS_BID_ID"), CStr(purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID), validationResult
-        ' Note: we ignore validationResult since the field is not actually validated field by PS
+        PeopleSoft_Page_SetValidatedField driver, ("PO_HDR_Z_XPRESS_BID_ID"), CStr(purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID), purchaseOrder.PO_Fields.PO_HDR_XPRESS_BID_ID_Result
+        ' Note: we ignore validation result since the field is not actually validated field by PS
     End If
     
     
@@ -969,12 +1020,14 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     ' -------------------------------------------------------------------
     ' Begin - Calculate and fill defaults if the PO has more than one line
     ' -------------------------------------------------------------------
+    Dim poDefaults As PeopleSoft_PurchaseOrder_PO_Defaults
+    
     If purchaseOrder.PO_LineCount > 1 Then
-        purchaseOrder.PO_Defaults = PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder)
-        PeopleSoft_PurchaseOrder_PO_Defaults_Fill driver, purchaseOrder.PO_Defaults
+        poDefaults = PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder)
+        PeopleSoft_PurchaseOrder_PO_Defaults_Fill driver, poDefaults
         
         ' Begin - Transfer validation errors from defaults to each corresponding line/schedule
-        If purchaseOrder.PO_Defaults.HasValidationError Then
+        If poDefaults.HasValidationError Then
             For PO_Line = 1 To purchaseOrder.PO_LineCount
                 ' Determine if expense line
                 isExpenseLine = False
@@ -983,41 +1036,49 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
             
                 For PO_Line_Schedule = 1 To purchaseOrder.PO_Lines(PO_Line).ScheduleCount
                 
-                    ' Transfer Validation Results to defaults to each line/schedule
+                    ' Transfer Validation Results/Extracted fields from defaults to each line/schedule
                     With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule)
-                        .ScheduleFields.DUE_DATE_Result = purchaseOrder.PO_Defaults.SCH_DUE_DATE_Result
+                        .ScheduleFields.DUE_DATE_Result = poDefaults.SCH_DUE_DATE_Result
+                        
                         
                         If isExpenseLine Then
-                            .DistributionFields.BUSINESS_UNIT_PC_Result = purchaseOrder.PO_Defaults.DIST_EXP_BUSINESS_UNIT_PC_Result
-                            .DistributionFields.PROJECT_CODE_Result = purchaseOrder.PO_Defaults.DIST_EXP_PROJECT_CODE_Result
-                            .DistributionFields.ACTIVITY_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_ACTIVITY_ID_Result
-                            .ScheduleFields.SHIPTO_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_SHIP_TO_ID_Result
-                            .DistributionFields.LOCATION_ID_Result = purchaseOrder.PO_Defaults.DIST_EXP_LOCATION_ID_Result
+                            .DistributionFields.BUSINESS_UNIT_PC_Result = poDefaults.DIST_EXP_BUSINESS_UNIT_PC_Result
+                            .DistributionFields.PROJECT_CODE_Result = poDefaults.DIST_EXP_PROJECT_CODE_Result
+                            .DistributionFields.ACTIVITY_ID_Result = poDefaults.DIST_EXP_ACTIVITY_ID_Result
+                            .ScheduleFields.SHIPTO_ID_Result = poDefaults.DIST_EXP_SHIP_TO_ID_Result
+                            .DistributionFields.LOCATION_ID_Result = poDefaults.DIST_EXP_LOCATION_ID_Result
+                            
+                            ' Extracted field values
+                            .DistributionFields.PROJECT_DESC = poDefaults.DIST_EXP_PROJECT_DESC
                         Else
-                            .DistributionFields.BUSINESS_UNIT_PC_Result = purchaseOrder.PO_Defaults.DIST_CAP_BUSINESS_UNIT_PC_Result
-                            .DistributionFields.PROJECT_CODE_Result = purchaseOrder.PO_Defaults.DIST_CAP_PROJECT_CODE_Result
-                            .DistributionFields.ACTIVITY_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_ACTIVITY_ID_Result
-                            .ScheduleFields.SHIPTO_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_SHIP_TO_ID_Result
-                            .DistributionFields.LOCATION_ID_Result = purchaseOrder.PO_Defaults.DIST_CAP_LOCATION_ID_Result
+                            .DistributionFields.BUSINESS_UNIT_PC_Result = poDefaults.DIST_CAP_BUSINESS_UNIT_PC_Result
+                            .DistributionFields.PROJECT_CODE_Result = poDefaults.DIST_CAP_PROJECT_CODE_Result
+                            .DistributionFields.ACTIVITY_ID_Result = poDefaults.DIST_CAP_ACTIVITY_ID_Result
+                            .ScheduleFields.SHIPTO_ID_Result = poDefaults.DIST_CAP_SHIP_TO_ID_Result
+                            .DistributionFields.LOCATION_ID_Result = poDefaults.DIST_CAP_LOCATION_ID_Result
+                            
+                            ' Extracted field values
+                            .DistributionFields.PROJECT_DESC = poDefaults.DIST_CAP_PROJECT_DESC
                         End If
+                        
                     End With
                     
                     ' Set line validation error
-                    With purchaseOrder.PO_Defaults
-                        If isExpenseLine Then
-                            purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
-                                Or .SCH_DUE_DATE_Result.ValidationFailed _
-                                Or .DIST_EXP_BUSINESS_UNIT_PC_Result.ValidationFailed Or .DIST_EXP_PROJECT_CODE_Result.ValidationFailed _
-                                Or .DIST_EXP_ACTIVITY_ID_Result.ValidationFailed Or .DIST_EXP_SHIP_TO_ID_Result.ValidationFailed _
-                                Or .DIST_EXP_LOCATION_ID_Result.ValidationFailed
-                        Else
-                            purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
-                                Or .SCH_DUE_DATE_Result.ValidationFailed _
-                                Or .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed Or .DIST_CAP_PROJECT_CODE_Result.ValidationFailed _
-                                Or .DIST_CAP_ACTIVITY_ID_Result.ValidationFailed Or .DIST_CAP_SHIP_TO_ID_Result.ValidationFailed _
-                                Or .DIST_CAP_LOCATION_ID_Result.ValidationFailed
-                        End If
-                    End With
+                    If isExpenseLine Then
+                        purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
+                            Or poDefaults.SCH_DUE_DATE_Result.ValidationFailed _
+                            Or poDefaults.DIST_EXP_BUSINESS_UNIT_PC_Result.ValidationFailed Or poDefaults.DIST_EXP_PROJECT_CODE_Result.ValidationFailed _
+                            Or poDefaults.DIST_EXP_ACTIVITY_ID_Result.ValidationFailed Or poDefaults.DIST_EXP_SHIP_TO_ID_Result.ValidationFailed _
+                            Or poDefaults.DIST_EXP_LOCATION_ID_Result.ValidationFailed
+                    Else
+                        purchaseOrder.PO_Lines(PO_Line).HasValidationError = purchaseOrder.PO_Lines(PO_Line).HasValidationError _
+                            Or poDefaults.SCH_DUE_DATE_Result.ValidationFailed _
+                            Or poDefaults.DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed Or poDefaults.DIST_CAP_PROJECT_CODE_Result.ValidationFailed _
+                            Or poDefaults.DIST_CAP_ACTIVITY_ID_Result.ValidationFailed Or poDefaults.DIST_CAP_SHIP_TO_ID_Result.ValidationFailed _
+                            Or poDefaults.DIST_CAP_LOCATION_ID_Result.ValidationFailed
+                    End If
+                    
+                    
                     
                 Next PO_Line_Schedule
             Next PO_Line
@@ -1086,9 +1147,6 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     
     
     
-    'Dim anyLineHasValidationError As Boolean
-    
-    'anyLineHasValidationError = False
     
     For PO_Line = 1 To PO_LineCount
         Debug_Print "PeopleSoft_PurchaseOrder_CutPO: Processing Line #" & PO_Line & " (" & _
@@ -1098,20 +1156,16 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
         PeopleSoft_PurchaseOrder_Fill_PO_Line driver, purchaseOrder, PO_Line, PO_pageScheduleIndex
         If purchaseOrder.HasError Then GoTo ValidationFail
         
-        'If purchaseOrder.PO_Lines(PO_Line).HasValidationError Then anyLineHasValidationError = True
         If purchaseOrder.PO_Lines(PO_Line).HasValidationError Then GoTo ValidationFail
-        
         
         PO_pageScheduleIndex = PO_pageScheduleIndex + purchaseOrder.PO_Lines(PO_Line).ScheduleCount
     Next PO_Line
     
     
-    'If anyLineHasValidationError Then GoTo ValidationFail
     
-       
+    
     driver.runScript "javascript:submitAction_win0(document.win0,'CALCULATE_TAXES');" ' Fix for 2.9.1.1  due to PS upgrade
     'driver.findElementById("CALCULATE_TAXES").Click
-    
     PeopleSoft_Page_WaitForProcessing driver
 
     
@@ -1130,7 +1184,12 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     purchaseOrder.PO_AMNT_FTM_TOTAL = CurrencyFromString(amntStr)
     
     
-    
+    If DEBUG_OPTIONS.QuitBeforeSave Then
+        purchaseOrder.GlobalError = "Debug option QuitBeforeSave enabled. Processing halted before saving. To prevent this from occurring, disable QuitBeforeSave option."
+        purchaseOrder.HasError = True
+        PeopleSoft_PurchaseOrder_CutPO = False
+        Exit Function
+    End If
     
     Dim result As Boolean
     
@@ -1155,19 +1214,251 @@ Public Function PeopleSoft_PurchaseOrder_CutPO(ByRef session As PeopleSoft_Sessi
     Exit Function
     
     
+
+CreatePoFailed:
 ValidationFail:
-    PeopleSoft_SaveDebugInfo driver, "CutPO"
+    PeopleSoft_SaveDebugInfo driver
     PeopleSoft_PurchaseOrder_CutPO = False
     Exit Function
     
 ExceptionThrown:
-    PeopleSoft_SaveDebugInfo driver, "CutPO"
+    PeopleSoft_SaveDebugInfo driver
     purchaseOrder.HasError = True
     purchaseOrder.GlobalError = "Exception: " & Err.Description
     
     PeopleSoft_PurchaseOrder_CutPO = False
 
 
+End Function
+Private Function PeopleSoft_PurchaseOrder_PO_Fields_PreCheck(poFields As PeopleSoft_PurchaseOrder_Fields) As Boolean
+
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Fields_PreCheck: PO (" & Debug_VarListString( _
+        "PO REF", poFields.PO_HDR_PO_REF, _
+        "BUYER ID", poFields.PO_HDR_BUYER_ID, _
+        "VENDOR ID", poFields.PO_HDR_VENDOR_ID, _
+        "VENDOR NAME SHORT", poFields.VENDOR_NAME_SHORT, _
+        "PO QUOTE", poFields.PO_HDR_QUOTE, _
+        "XPRESS BID ID", poFields.PO_HDR_XPRESS_BID_ID, _
+        "Quote FilePath", poFields.Quote_Attachment_FilePath) _
+        & ")"
+    
+    
+    
+    ' Begin - Check required fields
+    If Len(poFields.PO_BUSINESS_UNIT) = 0 Then
+        poFields.PO_BUSINESS_UNIT_Result.ValidationErrorText = "PO BUSINESS UNIT is required."
+        poFields.PO_BUSINESS_UNIT_Result.ValidationFailed = True
+        poFields.HasValidationError = True
+    End If
+    If poFields.PO_HDR_BUYER_ID = 0 Then
+        poFields.PO_HDR_BUYER_ID_Result.ValidationErrorText = "BUYER ID is required."
+        poFields.PO_HDR_BUYER_ID_Result.ValidationFailed = True
+        poFields.HasValidationError = True
+    End If
+    If poFields.PO_HDR_VENDOR_ID = 0 And Len(poFields.VENDOR_NAME_SHORT_Result) = 0 Then
+        poFields.PO_HDR_VENDOR_ID_Result.ValidationErrorText = "PO VENDOR is required."
+        poFields.PO_HDR_VENDOR_ID_Result.ValidationFailed = True
+        poFields.VENDOR_NAME_SHORT_Result.ValidationErrorText = "PO VENDOR is required."
+        poFields.VENDOR_NAME_SHORT_Result.ValidationFailed = True
+        poFields.HasValidationError = True
+    End If
+    If Len(poFields.PO_HDR_PO_REF) = 0 Then
+        poFields.PO_HDR_PO_REF_Result.ValidationErrorText = "PO REF is required."
+        poFields.PO_HDR_PO_REF_Result.ValidationFailed = True
+        poFields.HasValidationError = True
+    End If
+    
+    If poFields.HasValidationError Then GoTo PreCheckFailed
+    ' End - Check required fields
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    If PeopleSoft_ValidateField_IsSingleLine("PO BUSINESS UNIT", poFields.PO_BUSINESS_UNIT, poFields.PO_BUSINESS_UNIT_Result) = False Then poFields.HasValidationError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO VENDOR NAME SHORT", poFields.VENDOR_NAME_SHORT, poFields.VENDOR_NAME_SHORT_Result) = False Then poFields.HasValidationError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO REF", poFields.PO_HDR_PO_REF, poFields.PO_HDR_PO_REF_Result) = False Then poFields.HasValidationError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO QUOTE", poFields.PO_HDR_QUOTE, poFields.PO_HDR_QUOTE_Result) = False Then poFields.HasValidationError = True
+    If PeopleSoft_ValidateField_IsSingleLine("XPRESS BID ID", poFields.PO_HDR_XPRESS_BID_ID, poFields.PO_HDR_XPRESS_BID_ID_Result) = False Then poFields.HasValidationError = True
+    
+    If PeopleSoft_ValidateField_IsSingleLine("Quote Attachment FilePath", poFields.Quote_Attachment_FilePath, poFields.Quote_Attachment_FilePath_Result) = False Then poFields.HasValidationError = True
+
+    If poFields.HasValidationError Then GoTo PreCheckFailed
+    ' End - validate fields: ensure single-line fields are actually a single line
+    
+    
+    ' Check if Quote_Attachment_FilePath exists
+    If Len(poFields.Quote_Attachment_FilePath) > 0 Then
+        ' Check if file exists
+        If Dir(poFields.Quote_Attachment_FilePath) = "" Then
+            poFields.HasValidationError = True
+            poFields.Quote_Attachment_FilePath_Result.ValidationFailed = True
+            poFields.Quote_Attachment_FilePath_Result.ValidationErrorText = "File Not Found: " & poFields.Quote_Attachment_FilePath
+        End If
+    End If
+    
+    
+    PeopleSoft_PurchaseOrder_PO_Fields_PreCheck = True
+    Exit Function
+    
+PreCheckFailed:
+    poFields.HasValidationError = True
+    PeopleSoft_PurchaseOrder_PO_Fields_PreCheck = False
+    
+    
+    Dim globalErrorStr As String: globalErrorStr = ""
+    
+    If poFields.PO_BUSINESS_UNIT_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_BUSINESS_UNIT_Result.ValidationErrorText & vbCrLf
+    If poFields.PO_HDR_BUYER_ID_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_HDR_BUYER_ID_Result.ValidationErrorText & vbCrLf
+    If poFields.PO_HDR_VENDOR_ID_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_HDR_VENDOR_ID_Result.ValidationErrorText & vbCrLf
+    If poFields.VENDOR_NAME_SHORT_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.VENDOR_NAME_SHORT_Result.ValidationErrorText & vbCrLf
+    If poFields.PO_HDR_PO_REF_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_HDR_PO_REF_Result.ValidationErrorText & vbCrLf
+    If poFields.PO_HDR_QUOTE_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_HDR_QUOTE_Result.ValidationErrorText & vbCrLf
+    If poFields.PO_HDR_XPRESS_BID_ID_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.PO_HDR_XPRESS_BID_ID_Result.ValidationErrorText & vbCrLf
+    If poFields.Quote_Attachment_FilePath_Result.ValidationFailed Then globalErrorStr = globalErrorStr & poFields.Quote_Attachment_FilePath_Result.ValidationErrorText & vbCrLf
+
+    
+    ' Remove CR-LF at end of error string if it exists
+    If Len(globalErrorStr) > 0 Then
+        If Right$(globalErrorStr, Len(vbCrLf)) = vbCrLf Then globalErrorStr = Left$(globalErrorStr, Len(globalErrorStr) - Len(vbCrLf))
+    End If
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_PO_Fields_PreCheck: failed! " & globalErrorStr
+    
+End Function
+
+Private Function PeopleSoft_PurchaseOrder_CutPO_PreCheck(purchaseOrder As PeopleSoft_PurchaseOrder) As Boolean
+
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CutPO_PreCheck: PO (" & Debug_VarListString( _
+        "PO REF", purchaseOrder.PO_Fields.PO_HDR_PO_REF) _
+        & ")"
+    
+       
+    If PeopleSoft_PurchaseOrder_PO_Fields_PreCheck(purchaseOrder.PO_Fields) = False Then
+        purchaseOrder.GlobalError = "One or more PO fields failed validation"
+        GoTo PreCheckFailed
+    End If
+    
+    
+    '---------------------------------------------------------------
+    ' Begin - Perform PO Line/Schedule Pre-Checks
+    '---------------------------------------------------------------
+    Dim PO_Line As Integer, PO_Schedule As Integer
+    Dim hasAnyValidationError As Boolean
+    
+    If purchaseOrder.PO_LineCount < 1 Then
+        purchaseOrder.GlobalError = "PO must have at least one PO line and schedule"
+        GoTo PreCheckFailed
+    End If
+    
+    ' Check if each line has at least one schedule
+    For PO_Line = 1 To purchaseOrder.PO_LineCount
+        If purchaseOrder.PO_Lines(PO_Line).ScheduleCount < 1 Then
+            purchaseOrder.GlobalError = "PO Line " & PO_Line & " must have one or more schedules"
+            purchaseOrder.HasError = True
+        End If
+    Next PO_Line
+    
+    If purchaseOrder.HasError Then GoTo PreCheckFailed
+    
+    
+    ' Begin - Check required fields
+    hasAnyValidationError = False
+    
+    For PO_Line = 1 To purchaseOrder.PO_LineCount
+        ' PO Line required fields
+        With purchaseOrder.PO_Lines(PO_Line)
+            If Len(.LineFields.PO_LINE_ITEM_ID) = 0 Then
+                .LineFields.PO_LINE_ITEM_ID_Result.ValidationErrorText = "PO_LINE_ITEM_ID is required."
+                .LineFields.PO_LINE_ITEM_ID_Result.ValidationFailed = True
+                .HasValidationError = True
+                hasAnyValidationError = True
+            End If
+        End With
+    
+        For PO_Schedule = 1 To purchaseOrder.PO_Lines(PO_Line).ScheduleCount
+            With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Schedule)
+                If .ScheduleFields.DUE_DATE = 0 Then
+                    .ScheduleFields.DUE_DATE_Result.ValidationErrorText = "SCH DUE DATE is required."
+                    .ScheduleFields.DUE_DATE_Result.ValidationFailed = True
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+                If .ScheduleFields.QTY = 0 Then
+                    .ScheduleFields.QTY_Result.ValidationErrorText = "SCH QTY is required."
+                    .ScheduleFields.QTY_Result.ValidationFailed = True
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+                If .ScheduleFields.SHIPTO_ID = 0 Then
+                    .ScheduleFields.SHIPTO_ID_Result.ValidationErrorText = "SCH SHIP TO ID is required."
+                    .ScheduleFields.SHIPTO_ID_Result.ValidationFailed = True
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+                
+                ' NOTE: Distribution fields may or may not be required depending on the item type (cap/expense). We will forego any pre-check and let PeopleSoft handle it.
+            End With
+        Next PO_Schedule
+    Next PO_Line
+    
+    If hasAnyValidationError Then
+        purchaseOrder.GlobalError = "One or more required PO Line/Schedule fields are missing data"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    hasAnyValidationError = False
+    
+    For PO_Line = 1 To purchaseOrder.PO_LineCount
+        ' PO Line required fields
+        With purchaseOrder.PO_Lines(PO_Line)
+            If PeopleSoft_ValidateField_IsSingleLine("PO_LINE_ITEM_ID", .LineFields.PO_LINE_ITEM_ID, .LineFields.PO_LINE_ITEM_ID_Result) = False Then
+                .HasValidationError = True
+                hasAnyValidationError = True
+            End If
+        End With
+    
+        For PO_Schedule = 1 To purchaseOrder.PO_Lines(PO_Line).ScheduleCount
+            With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Schedule)
+                If PeopleSoft_ValidateField_IsSingleLine("BUSINESS_UNIT_PC", .DistributionFields.BUSINESS_UNIT_PC, .DistributionFields.BUSINESS_UNIT_PC_Result) Then
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+                If PeopleSoft_ValidateField_IsSingleLine("PROJECT_CODE", .DistributionFields.PROJECT_CODE, .DistributionFields.PROJECT_CODE_Result) Then
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+                If PeopleSoft_ValidateField_IsSingleLine("ACTIVITY_ID", .DistributionFields.ACTIVITY_ID, .DistributionFields.ACTIVITY_ID_Result) Then
+                    purchaseOrder.PO_Lines(PO_Line).HasValidationError = True
+                    hasAnyValidationError = True
+                End If
+            End With
+        Next PO_Schedule
+    Next PO_Line
+    
+    If hasAnyValidationError Then
+        purchaseOrder.GlobalError = "One or more required PO Line/Schedule field failed validation"
+        GoTo PreCheckFailed
+    End If
+    ' End - validate fields: ensure single-line fields are actually a single line
+    
+    
+    '---------------------------------------------------------------
+    ' End - Perform PO Line/Schedule Pre-Checks
+    '---------------------------------------------------------------
+
+    
+    PeopleSoft_PurchaseOrder_CutPO_PreCheck = True
+    Exit Function
+    
+PreCheckFailed:
+    purchaseOrder.HasError = True
+    PeopleSoft_PurchaseOrder_CutPO_PreCheck = False
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CutPO_PreCheck: failed! " & purchaseOrder.GlobalError
+    
 End Function
 Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As PeopleSoft_Session, ByRef poCFQ As PeopleSoft_PurchaseOrder_CreateFromQuoteParams) As Boolean
 
@@ -1177,6 +1468,13 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     
     
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
+    
+    ' Perform Pre-Check
+    If PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck(poCFQ) = False Then
+        poCFQ.HasError = True
+        PeopleSoft_PurchaseOrder_CreateFromQuote = False
+        Exit Function
+    End If
 
 
     Dim driver As SeleniumWrapper.WebDriver, By As New SeleniumWrapper.By
@@ -1310,7 +1608,6 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
        
         ' Expand All
         driver.runScript "javascript:submitAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);" ' Fix for 2.9.1.1  due to PS upgrade
-        'driver.runScript "javascript:hAction_win0(document.win0,'PO_PNLS_PB_EXPAND_ALL_PB', 0, 0, 'Expand All', false, true);"
         PeopleSoft_Page_WaitForProcessing driver
         
         For PO_LineMod = 1 To poCFQ.PO_LineModCount
@@ -1389,7 +1686,6 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
        
     driver.runScript "javascript:submitAction_win0(document.win0,'CALCULATE_TAXES');" ' Fix for 2.9.1.1  due to PS upgrade
     'driver.findElementById("CALCULATE_TAXES").Click
-    
     PeopleSoft_Page_WaitForProcessing driver
 
     
@@ -1409,6 +1705,12 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     
     
     
+    If DEBUG_OPTIONS.QuitBeforeSave Then
+        poCFQ.GlobalError = "Debug option QuitBeforeSave enabled. Processing halted before saving. To prevent this from occurring, disable QuitBeforeSave option."
+        poCFQ.HasError = True
+        PeopleSoft_PurchaseOrder_CreateFromQuote = False
+        Exit Function
+    End If
     
     
     Dim result As Boolean
@@ -1432,18 +1734,198 @@ Public Function PeopleSoft_PurchaseOrder_CreateFromQuote(ByRef session As People
     
     
 ValidationFail:
-    PeopleSoft_SaveDebugInfo driver, "eQuote"
+    PeopleSoft_SaveDebugInfo driver
     PeopleSoft_PurchaseOrder_CreateFromQuote = False
     Exit Function
     
 ExceptionThrown:
-    PeopleSoft_SaveDebugInfo driver, "eQuote"
+    PeopleSoft_SaveDebugInfo driver
     poCFQ.HasError = True
     poCFQ.GlobalError = "Exception: " & Err.Description
     
     PeopleSoft_PurchaseOrder_CreateFromQuote = False
 
 
+End Function
+Private Function PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck(poCFQ As PeopleSoft_PurchaseOrder_CreateFromQuoteParams) As Boolean
+
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck: PO (" & Debug_VarListString( _
+        "PO REF", poCFQ.PO_Fields.PO_HDR_PO_REF, _
+        "EQUOTE", poCFQ.E_QUOTE_NBR) _
+        & ")"
+    
+    
+    ' PeopleSoft_PurchaseOrder_PO_Fields_PreCheck() checks if either VENDOR ID *or* VENDOR SHORT NAME is given.
+    ' When creating from quote, only creating using vendor ID is allowed. So we must explicitly check for it here.
+    If poCFQ.PO_Fields.PO_HDR_VENDOR_ID = 0 Then
+        poCFQ.PO_Fields.HasValidationError = True
+        poCFQ.PO_Fields.PO_HDR_VENDOR_ID_Result.ValidationFailed = True
+        poCFQ.PO_Fields.PO_HDR_VENDOR_ID_Result.ValidationErrorText = "VENDOR ID is required"
+        poCFQ.GlobalError = "One or more PO fields failed validation"
+        GoTo PreCheckFailed
+    End If
+    
+       
+     ' Check standard fields
+    If PeopleSoft_PurchaseOrder_PO_Fields_PreCheck(poCFQ.PO_Fields) = False Then
+        poCFQ.GlobalError = "One or more PO fields failed validation"
+        GoTo PreCheckFailed
+    End If
+    
+    ' Begin - Check required fields
+    If Len(poCFQ.E_QUOTE_NBR) = 0 Then
+        poCFQ.E_QUOTE_NBR_Result.ValidationFailed = True
+        poCFQ.E_QUOTE_NBR_Result.ValidationErrorText = "E QUOTE NBR is required"
+        poCFQ.GlobalError = "One or more PO fields failed validation"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    If PeopleSoft_ValidateField_IsSingleLine("E QUOTE NBR", poCFQ.E_QUOTE_NBR, poCFQ.E_QUOTE_NBR_Result) = False Then
+        poCFQ.GlobalError = "One or more PO fields failed validation"
+        GoTo PreCheckFailed
+    End If
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    
+    
+    '---------------------------------------------------------------
+    ' Begin - Perform PO Default Pre-Checks
+    '---------------------------------------------------------------
+    ' Note: We are checking capital chartfields only. It is assumed expense
+    ' chartfields will be a line mod (since at least the EXP-* item code) will need
+    ' to be specified
+    
+    ' Begin - Check required fields
+    With poCFQ.PO_Defaults
+        If .SCH_DUE_DATE = 0 Then
+            .SCH_DUE_DATE_Result.ValidationErrorText = "SCH DUE DATE is required."
+            .SCH_DUE_DATE_Result.ValidationFailed = True
+            .HasValidationError = True
+        End If
+        If .DIST_CAP_SHIP_TO_ID = 0 Then
+            .DIST_CAP_SHIP_TO_ID_Result.ValidationErrorText = "SHIP TO ID is required."
+            .DIST_CAP_SHIP_TO_ID_Result.ValidationFailed = True
+            .HasValidationError = True
+        End If
+        If Len(.DIST_CAP_BUSINESS_UNIT_PC) = 0 Then
+            .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationErrorText = "BUSINESS_UNIT_PC is required."
+            .DIST_CAP_BUSINESS_UNIT_PC_Result.ValidationFailed = True
+            .HasValidationError = True
+        End If
+        If Len(.DIST_CAP_PROJECT_CODE) = 0 Then
+            .DIST_CAP_PROJECT_CODE_Result.ValidationErrorText = "PROJECT_CODE is required."
+            .DIST_CAP_PROJECT_CODE_Result.ValidationFailed = True
+            .HasValidationError = True
+        End If
+     
+        ' Note: we assume Location ID and Activity ID is not required. They may or may not be required
+        ' by PeopleSoft depending on project type. If there is an error, it will be discovered during
+        ' the browswer automation
+        
+    End With
+        
+    If poCFQ.PO_Defaults.HasValidationError Then
+        poCFQ.PO_Defaults.GlobalError = "One or more PO fields failed validation"
+        poCFQ.PO_Defaults.HasGlobalError = True
+        poCFQ.GlobalError = poCFQ.PO_Defaults.GlobalError
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    With poCFQ.PO_Defaults
+        If PeopleSoft_ValidateField_IsSingleLine("BUSINESS_UNIT_PC", .DIST_CAP_BUSINESS_UNIT_PC, .DIST_CAP_BUSINESS_UNIT_PC_Result) = False Then .HasValidationError = True
+        If PeopleSoft_ValidateField_IsSingleLine("PROJECT_CODE", .DIST_CAP_PROJECT_CODE, .DIST_CAP_PROJECT_CODE_Result) = False Then .HasValidationError = True
+        If PeopleSoft_ValidateField_IsSingleLine("ACTIVITY_ID", .DIST_CAP_ACTIVITY_ID, .DIST_CAP_ACTIVITY_ID_Result) = False Then .HasValidationError = True
+    End With
+    
+    If poCFQ.PO_Defaults.HasValidationError Then
+        poCFQ.PO_Defaults.GlobalError = "One or more PO fields failed validation"
+        poCFQ.PO_Defaults.HasGlobalError = True
+        poCFQ.GlobalError = poCFQ.PO_Defaults.GlobalError
+        GoTo PreCheckFailed
+    End If
+    ' End - validate fields: ensure single-line fields are actually a single line
+    '---------------------------------------------------------------
+    ' End - Perform PO Default Pre-Checks
+    '---------------------------------------------------------------
+    
+    
+    '---------------------------------------------------------------
+    ' Begin - Perform PO Line Modification Pre-Checks
+    '---------------------------------------------------------------
+    Dim anyItemHasErrors As Boolean
+    Dim i As Integer, j As Integer
+    
+    ' Begin - Check for duplicate PO lines
+    anyItemHasErrors = False
+    
+    For i = 1 To poCFQ.PO_LineModCount
+        For j = i + 1 To poCFQ.PO_LineModCount
+            If poCFQ.PO_LineMods(i).PO_Line = poCFQ.PO_LineMods(j).PO_Line Then
+                poCFQ.PO_LineMods(i).HasValidationError = True
+                poCFQ.PO_LineMods(j).HasValidationError = True
+                poCFQ.PO_LineMods(i).ItemError = "Duplicate line"
+                poCFQ.PO_LineMods(j).ItemError = "Duplicate line"
+                anyItemHasErrors = True
+            End If
+        Next j
+    Next i
+    
+    If anyItemHasErrors Then
+        poCFQ.GlobalError = "Line modifications has at least one duplicate line"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check for duplicate PO lines
+    
+    
+    ' Begin - Validate Line modifcations
+    anyItemHasErrors = False
+
+    For i = 1 To poCFQ.PO_LineModCount
+        With poCFQ.PO_LineMods(i)
+            ' Valid line modification?
+            If .PO_Line > 0 Then
+                ' Begin - validate fields: ensure single-line fields are actually a single line
+                If PeopleSoft_ValidateField_IsSingleLine("PO_LINE_ITEM_ID", .PO_LINE_ITEM_ID, .PO_LINE_ITEM_ID_Result) = False Then .HasValidationError = True
+                If PeopleSoft_ValidateField_IsSingleLine("BUSINESS_UNIT_PC", .DIST_BUSINESS_UNIT_PC, .DIST_BUSINESS_UNIT_PC_Result) = False Then .HasValidationError = True
+                If PeopleSoft_ValidateField_IsSingleLine("PROJECT_CODE", .DIST_PROJECT_CODE, .DIST_PROJECT_CODE_Result) = False Then .HasValidationError = True
+                If PeopleSoft_ValidateField_IsSingleLine("ACTIVITY_ID", .DIST_ACTIVITY_ID, .DIST_ACTIVITY_ID_Result) = False Then .HasValidationError = True
+                
+                If .HasValidationError Then
+                    .ItemError = "Line modification has pre-check errors"
+                    anyItemHasErrors = True
+                End If
+                ' End - validate fields: ensure single-line fields are actually a single line
+            End If
+        End With
+    Next i
+    ' End - Validate Line modifcations
+    
+    If anyItemHasErrors Then
+        poCFQ.GlobalError = "One or more line modification items has pre-check errors"
+        GoTo PreCheckFailed
+    End If
+    
+    
+    
+    '---------------------------------------------------------------
+    ' Begin - Perform PO Line Modification Pre-Checks
+    '---------------------------------------------------------------
+
+    
+    PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck = True
+    Exit Function
+    
+PreCheckFailed:
+    poCFQ.HasError = True
+    PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck = False
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_CreateFromQuote_PreCheck: failed! " & poCFQ.GlobalError
+    
 End Function
 Public Function PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder As PeopleSoft_PurchaseOrder) As PeopleSoft_PurchaseOrder_PO_Defaults
 
@@ -1567,7 +2049,7 @@ Public Function PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc(purchaseOrder As P
     PeopleSoft_PurchaseOrder_PO_Defaults_AutoCalc = PO_Defaults
 
 End Function
-Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWrapper.WebDriver, PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults) As Boolean
+Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWrapper.WebDriver, ByRef PO_Defaults As PeopleSoft_PurchaseOrder_PO_Defaults) As Boolean
 
      
     Debug_Print "PeopleSoft_PurchaseOrder_PO_Defaults_Fill called"
@@ -1683,9 +2165,16 @@ Private Function PeopleSoft_PurchaseOrder_PO_Defaults_Fill(driver As SeleniumWra
     End If
 
 
-    ' Need to implement expense chartfields:
+    ' TODO: Need to implement expense chartfields:
     ' Exp Cost Center: PO_DFLT_DISTRIB_Z_EXP_DEPTID$0
     ' Exp Product Code: PO_DFLT_DISTRIB_Z_EXP_PROD$0
+    
+    
+    ' Extract some fields from page
+    If Len(PO_Defaults.DIST_CAP_PROJECT_CODE) > 0 Then _
+        PO_Defaults.DIST_CAP_PROJECT_DESC = driver.findElementById("Z_PROJ_CAP_VW_DESCR$0").text
+    If Len(PO_Defaults.DIST_EXP_PROJECT_CODE) > 0 Then _
+        PO_Defaults.DIST_EXP_PROJECT_DESC = driver.findElementById("Z_PROJ_EXP_VW1_DESCR$0").text
     
     
     ' Click save
@@ -1992,7 +2481,7 @@ Public Function PeopleSoft_PurchaseOrder_Fill_PO_Line(driver As SeleniumWrapper.
     
 
     
-    On Error GoTo ExceptionThrown
+    If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
     
     
     Dim PO_Line_Schedule As Integer, PO_Line_ScheduleCount As Integer
@@ -2033,120 +2522,110 @@ Public Function PeopleSoft_PurchaseOrder_Fill_PO_Line(driver As SeleniumWrapper.
     For PO_Line_Schedule = 1 To PO_Line_ScheduleCount
         ' Begin - Enter Schedule Fields
         
-        Dim PO_pageScheduleIndex_tmp As Integer
-        PO_pageScheduleIndex_tmp = PO_pageScheduleIndex + PO_Line_Schedule - 1
-        
-        Debug.Print
-        
-        ' Due date set or PO default due date is not set
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE > 0 Or purchaseOrder.PO_Defaults.SCH_DUE_DATE = 0 Then
-            PeopleSoft_Page_SetValidatedField driver:=driver, fieldElementID:=("PO_LINE_SHIP_DUE_DT$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-                fieldValue:=Format(purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE, "mm/dd/yyyy"), _
-                validationResult:=purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE_Result, _
-                expectedPopupContents:="*Due Date selected is a weekend or a public holiday*"
-                
-
-            If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
+        With purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule)
+            ' PENDING DELETION: ' Due date set or PO default due date is not set
+            ' PENDING DELETION: If .ScheduleFields.DUE_DATE > 0 Or purchaseOrder.PO_Defaults.SCH_DUE_DATE = 0 Then
+            
+            ' Due date set or PO default due date is not set
+            If .ScheduleFields.DUE_DATE > 0 Then
+                PeopleSoft_Page_SetValidatedField driver:=driver, fieldElementID:=("PO_LINE_SHIP_DUE_DT$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                    fieldValue:=Format(.ScheduleFields.DUE_DATE, "mm/dd/yyyy"), _
+                    validationResult:=.ScheduleFields.DUE_DATE_Result, _
+                    expectedPopupContents:="*Due Date selected is a weekend or a public holiday*"
+                    
     
-        'Debug.Print
-        PeopleSoft_Page_SetValidatedField driver, ("PO_LINE_SHIP_SHIPTO_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-            CStr(purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.SHIPTO_ID), _
-            purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.SHIPTO_ID_Result
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.SHIPTO_ID_Result.ValidationFailed Then GoTo ValidationFail
-        
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY > 0 Then
-            PeopleSoft_Page_SetValidatedField driver, ("PO_LINE_SHIP_QTY_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-                CStr(purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY), _
-                purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result
+                If .ScheduleFields.DUE_DATE_Result.ValidationFailed Then GoTo ValidationFail
+            End If
             
-            If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result.ValidationFailed Then
-                'The vendor item price was not setup, or the corresponding UOd doesn 't meet the minimum requirements. The item standard price is used instead.
-                If InStr(1, purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result.ValidationErrorText, "The item standard price is") > 0 Then
-                    purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result.ValidationFailed = False
-                    purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result.ValidationErrorText = ""
+        
+            'Debug.Print
+            PeopleSoft_Page_SetValidatedField driver, ("PO_LINE_SHIP_SHIPTO_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                CStr(.ScheduleFields.SHIPTO_ID), .ScheduleFields.SHIPTO_ID_Result
+            
+            If .ScheduleFields.SHIPTO_ID_Result.ValidationFailed Then GoTo ValidationFail
+            
+            
+            If .ScheduleFields.QTY > 0 Then
+                PeopleSoft_Page_SetValidatedField driver, ("PO_LINE_SHIP_QTY_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                    CStr(.ScheduleFields.QTY), .ScheduleFields.QTY_Result
+                
+                If .ScheduleFields.QTY_Result.ValidationFailed Then
+                    'The vendor item price was not setup, or the corresponding UOd doesn 't meet the minimum requirements. The item standard price is used instead.
+                    If InStr(1, .ScheduleFields.QTY_Result.ValidationErrorText, "The item standard price is") > 0 Then
+                        .ScheduleFields.QTY_Result.ValidationFailed = False
+                        .ScheduleFields.QTY_Result.ValidationErrorText = ""
+                    End If
                 End If
+                
+                If .ScheduleFields.QTY_Result.ValidationFailed Then GoTo ValidationFail
             End If
             
-            If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.QTY_Result.ValidationFailed Then GoTo ValidationFail
-        End If
-        
-        
-        ' Retrieve price Dim priceStr As String
-        Dim priceStr As String, priceVal As Currency
-        
-        priceStr = driver.findElementById("PO_LINE_SHIP_PRICE_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)).getAttribute("value")
-        priceVal = CurrencyFromString(priceStr)
-        
-        ' Price given? Change price if PO default price is different from what is given. Otherwise, retrieve the price from page
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE > 0 Then
-            If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE <> priceVal Then
             
-                PeopleSoft_Page_SetValidatedField driver, _
-                    ("PO_LINE_SHIP_PRICE_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-                    CStr(purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE), _
-                    purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE_Result
+            ' Retrieve price Dim priceStr As String
+            Dim priceStr As String, priceVal As Currency
+            
+            priceStr = driver.findElementById("PO_LINE_SHIP_PRICE_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)).getAttribute("value")
+            priceVal = CurrencyFromString(priceStr)
+            
+            ' Price given? Change price if PO default price is different from what is given. Otherwise, retrieve the price from page
+            If .ScheduleFields.PRICE > 0 Then
+                If .ScheduleFields.PRICE <> priceVal Then
                 
-                If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE_Result.ValidationFailed Then GoTo ValidationFail
-                
-
+                    PeopleSoft_Page_SetValidatedField driver, _
+                        ("PO_LINE_SHIP_PRICE_PO$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                        CStr(.ScheduleFields.PRICE), .ScheduleFields.PRICE_Result
+                    
+                    If .ScheduleFields.PRICE_Result.ValidationFailed Then GoTo ValidationFail
+                    
+    
+                End If
+            Else
+                 .ScheduleFields.PRICE = priceVal
             End If
-        Else
-             purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).ScheduleFields.PRICE = priceVal
-        End If
-        ' End - Enter Schedule Fields
-        
-        ' Begin - Enter Distribution Fields
-        
-        PeopleSoft_Page_SetValidatedField driver, _
-            ("BUSINESS_UNIT_PC$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-            purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.BUSINESS_UNIT_PC, _
-            purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.BUSINESS_UNIT_PC_Result
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.BUSINESS_UNIT_PC_Result.ValidationFailed Then GoTo ValidationFail
-        
-        
-        PeopleSoft_Page_SetValidatedField driver, _
-            ("PROJECT_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-            purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.PROJECT_CODE, _
-            purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.PROJECT_CODE_Result
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.PROJECT_CODE_Result.ValidationFailed Then GoTo ValidationFail
-        
-        
-        
-        'PeopleSoft_Page_SetValidatedField driver, _
-        '    ("ACTIVITY_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-        '    purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID, _
-        '    purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID_Result
-        
-        'If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
-        
-        PeopleSoft_PurchaseOrder_SetValidatedField_ActivityID driver, _
-                ("ACTIVITY_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-                purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID, _
-                purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID_Result, _
-                ("ACTIVITY_ID$prompt$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1))
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
-        
-        
-        If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID > 0 Then
+            ' End - Enter Schedule Fields
+            
+            ' Begin - Enter Distribution Fields
+            
             PeopleSoft_Page_SetValidatedField driver, _
-                ("PO_LINE_DISTRIB_LOCATION$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
-                CStr(purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID), _
-                purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID_Result
+                ("BUSINESS_UNIT_PC$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                .DistributionFields.BUSINESS_UNIT_PC, .DistributionFields.BUSINESS_UNIT_PC_Result
             
-            If purchaseOrder.PO_Lines(PO_Line).Schedules(PO_Line_Schedule).DistributionFields.LOCATION_ID_Result.ValidationFailed Then GoTo ValidationFail
-        End If
+            If .DistributionFields.BUSINESS_UNIT_PC_Result.ValidationFailed Then GoTo ValidationFail
             
-        ' TODO: Additional Chartfields for expenses
-        '   Cost Center: DEPTID$X
-        '   Product Code: PRODUCT$X
+            
+            PeopleSoft_Page_SetValidatedField driver, _
+                ("PROJECT_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                .DistributionFields.PROJECT_CODE, .DistributionFields.PROJECT_CODE_Result
+            
+            If .DistributionFields.PROJECT_CODE_Result.ValidationFailed Then GoTo ValidationFail
+            
+            
+            PeopleSoft_PurchaseOrder_SetValidatedField_ActivityID driver, _
+                    ("ACTIVITY_ID$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                    .DistributionFields.ACTIVITY_ID, .DistributionFields.ACTIVITY_ID_Result, _
+                    ("ACTIVITY_ID$prompt$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1))
+            
+            If .DistributionFields.ACTIVITY_ID_Result.ValidationFailed Then GoTo ValidationFail
+            
+            
+            If .DistributionFields.LOCATION_ID > 0 Then
+                PeopleSoft_Page_SetValidatedField driver, _
+                    ("PO_LINE_DISTRIB_LOCATION$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)), _
+                    CStr(.DistributionFields.LOCATION_ID), .DistributionFields.LOCATION_ID_Result
+                
+                If .DistributionFields.LOCATION_ID_Result.ValidationFailed Then GoTo ValidationFail
+            End If
+                
+            ' TODO: Additional Chartfields for expenses
+            '   Cost Center: DEPTID$X
+            '   Product Code: PRODUCT$X
+            
+            ' Extract fields from page
+            If Len(.DistributionFields.PROJECT_CODE) > 0 Then _
+                .DistributionFields.PROJECT_DESC = driver.findElementById("Z_PROJ_BUGL_FVW_DESCR$" & (PO_pageScheduleIndex + PO_Line_Schedule - 1)).text
          
+        End With
+        
         PO_pageScheduleIndex = PO_pageScheduleIndex + 1
     Next PO_Line_Schedule
     
@@ -2185,24 +2664,13 @@ Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Sessi
     Dim By As New By, Assert As New Assert, Verify As New Verify
     Dim driver As New SeleniumWrapper.WebDriver
     Dim popupResult As PeopleSoft_Page_PopupCheckResult
-    Dim i As Long, j As Long
+    Dim i As Long
     
     
-    ' Pre-Check ensure there are no duplicate PO lines/schedules in ChangeOrderItems
-    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-        For j = i + 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-            If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line = poChangeOrder.PO_ChangeOrder_Items(j).PO_Line _
-              And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule = poChangeOrder.PO_ChangeOrder_Items(j).PO_Schedule Then
-                poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
-                poChangeOrder.PO_ChangeOrder_Items(j).HasError = True
-                poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Duplicate line/schedule"
-                poChangeOrder.PO_ChangeOrder_Items(j).ItemError = "Duplicate line/schedule"
-                
-                poChangeOrder.HasError = True
-                poChangeOrder.GlobalError = "Duplicate line/schedule in one more change order items"
-            End If
-        Next j
-    Next i
+    If PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder) = False Then
+        ' GlobalError and HasError set by PreCheck
+        GoTo ChangeOrderFailed
+    End If
     
     
     
@@ -2351,6 +2819,8 @@ Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Sessi
         
                 GoTo ChangeOrderFailed
             End If
+            
+            PeopleSoft_Page_WaitForProcessing driver
         Loop While popupResult.HasPopup
         
     End If
@@ -2362,7 +2832,7 @@ Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Sessi
     Dim validChangeOrderItemCount As Long: validChangeOrderItemCount = 0
     
     For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
-        If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line > 0 And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule > 0 Then validChangeOrderItemCount = validChangeOrderItemCount
+        If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line > 0 And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule > 0 Then validChangeOrderItemCount = validChangeOrderItemCount + 1
     Next i
     
     
@@ -2390,9 +2860,19 @@ Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Sessi
     ' TODO: Check if change made (e.g., due date was actually changed). Exit if not
     
     
+        
+    If DEBUG_OPTIONS.QuitBeforeSave Then
+        poChangeOrder.GlobalError = "Debug option QuitBeforeSave enabled. Processing halted before saving. To prevent this from occurring, disable QuitBeforeSave option."
+        poChangeOrder.HasError = True
+        PeopleSoft_ChangeOrder_Process = False
+        Exit Function
+    End If
+    
+    
+    
     
     driver.findElementById("PO_KK_WRK_PB_BUDGET_CHECK").Click
-    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_INFINITE
     
     
     If PeopleSoft_Page_ElementExists(driver, By.id("PO_CHNG_REASON_COMMENTS$0")) Then
@@ -2403,18 +2883,25 @@ Public Function PeopleSoft_ChangeOrder_Process(ByRef session As PeopleSoft_Sessi
         
         
         driver.findElementById("#ICSave").Click
-        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_INFINITE
+        
+        popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True)
+        
+        If popupResult.HasPopup Then
+            poChangeOrder.HasError = True
+            poChangeOrder.GlobalError = "Unexpected popup: " & popupResult.popupText
+            GoTo ChangeOrderFailed
+        End If
     End If
     
     PeopleSoft_ChangeOrder_Process = True
     Exit Function
     
 ValidationFail:
-    poChangeOrder.HasError = True
-    
 ChangeOrderFailed:
+    poChangeOrder.HasError = True
     PeopleSoft_ChangeOrder_Process = False
-    PeopleSoft_SaveDebugInfo driver, "ChangeOrder"
+    PeopleSoft_SaveDebugInfo driver
     Exit Function
     
 ExceptionThrown:
@@ -2422,7 +2909,7 @@ ExceptionThrown:
     poChangeOrder.GlobalError = "Exception: " & Err.Description
     
     PeopleSoft_ChangeOrder_Process = False
-    PeopleSoft_SaveDebugInfo driver, "ChangeOrder"
+    PeopleSoft_SaveDebugInfo driver
 
 End Function
 Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As PeopleSoft_PurchaseOrder_ChangeOrder) As Boolean
@@ -2430,11 +2917,49 @@ Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As People
     
     Debug_Print "PeopleSoft_ChangeOrder_Process_PreCheck: Change Order (" & Debug_VarListString("PO ID", poChangeOrder.PO_ID, "PO DUE DATE", poChangeOrder.PO_DUE_DATE, "SendToVendor", poChangeOrder.PO_HDR_FLG_SEND_TO_VENDOR) & ")"
     
+    Dim i As Long, j As Long
+    
     For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
         With poChangeOrder.PO_ChangeOrder_Items(i)
             Debug_Print "PeopleSoft_ChangeOrder_Process_PreCheck: Change Order Item: (" & Debug_VarListString("PO Line", .PO_Line, "PO Schedule", .PO_Schedule, "SCH_DUE_DATE", .SCH_DUE_DATE) & ")"
         End With
     Next i
+    
+    
+    ' Begin - Check required fields
+    If Len(poChangeOrder.PO_BU) = 0 Then
+        poChangeOrder.PO_BU_Result.ValidationErrorText = "PO BU is required."
+        poChangeOrder.PO_BU_Result.ValidationFailed = True
+        poChangeOrder.HasError = True
+    End If
+    If Len(poChangeOrder.PO_ID) = 0 Then
+        poChangeOrder.PO_ID_Result.ValidationErrorText = "PO BU is required."
+        poChangeOrder.PO_ID_Result.ValidationFailed = True
+        poChangeOrder.HasError = True
+    End If
+    
+    If poChangeOrder.HasError Then
+        poChangeOrder.GlobalError = "One or more required fields are missing"
+        GoTo PreCheckFailed
+    End If
+    
+    ' Change reason is not validated return in global error
+    If Len(poChangeOrder.ChangeReason) = 0 Then
+        poChangeOrder.GlobalError = "Change Reason is required"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    If PeopleSoft_ValidateField_IsSingleLine("PO BU", poChangeOrder.PO_BU, poChangeOrder.PO_BU_Result) = False Then poChangeOrder.HasError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO ID", poChangeOrder.PO_ID, poChangeOrder.PO_ID_Result) = False Then poChangeOrder.HasError = True
+    
+    If poChangeOrder.HasError Then
+        poChangeOrder.GlobalError = "One or more fields failed pre-check"
+        GoTo PreCheckFailed
+    End If
+    ' Begin - validate fields: ensure single-line fields are actually a single line
     
 
     Dim hasPoDefaultFieldChange As Boolean
@@ -2447,8 +2972,35 @@ Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As People
     
     If poChangeOrder.PO_DUE_DATE > 0 Then hasPoDefaultFieldChange = True
 
-    Dim i As Long
+
+    ' Begin - Check for duplicate PO lines/schedules in ChangeOrderItems
+    anyItemHasErrors = False
     
+    For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+        For j = i + 1 To poChangeOrder.PO_ChangeOrder_ItemCount
+            If poChangeOrder.PO_ChangeOrder_Items(i).PO_Line = poChangeOrder.PO_ChangeOrder_Items(j).PO_Line _
+              And poChangeOrder.PO_ChangeOrder_Items(i).PO_Schedule = poChangeOrder.PO_ChangeOrder_Items(j).PO_Schedule Then
+                poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
+                poChangeOrder.PO_ChangeOrder_Items(j).HasError = True
+                poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Duplicate line/schedule"
+                poChangeOrder.PO_ChangeOrder_Items(j).ItemError = "Duplicate line/schedule"
+                anyItemHasErrors = True
+            End If
+        Next j
+    Next i
+    
+    If anyItemHasErrors Then
+        poChangeOrder.HasError = True
+        poChangeOrder.GlobalError = "Duplicate line/schedule in one more change order items"
+        
+        GoTo PreCheckFailed
+    End If
+    ' End - Check for duplicate PO lines/schedules in ChangeOrderItems
+    
+    
+    ' Begin - Validate ChangeOrderItems
+    anyItemHasErrors = False
+
     For i = 1 To poChangeOrder.PO_ChangeOrder_ItemCount
         With poChangeOrder.PO_ChangeOrder_Items(i)
             ' Valid change order line?
@@ -2470,6 +3022,14 @@ Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As People
         End With
     Next i
     
+    If anyItemHasErrors Then
+        poChangeOrder.HasError = True
+        poChangeOrder.GlobalError = "One or more change items have pre-check errors"
+        
+        GoTo PreCheckFailed
+    End If
+    ' End - Validate ChangeOrderItems
+    
     
     If hasPoDefaultFieldChange = False And hasValidChangeOrderItem = False Then
         poChangeOrder.HasError = True
@@ -2477,17 +3037,13 @@ Private Function PeopleSoft_ChangeOrder_Process_PreCheck(poChangeOrder As People
         GoTo PreCheckFailed
     End If
     
-    If anyItemHasErrors Then
-        poChangeOrder.HasError = True
-        poChangeOrder.GlobalError = "One or more change items have pre-check errors"
-        GoTo PreCheckFailed
-    End If
     
     PeopleSoft_ChangeOrder_Process_PreCheck = True
     Exit Function
-    
+
 PreCheckFailed:
-    
+    poChangeOrder.HasError = True
+    Debug_Print "PeopleSoft_ChangeOrder_Process_PreCheck: Failed! " & poChangeOrder.GlobalError
     PeopleSoft_ChangeOrder_Process_PreCheck = False
 
 End Function
@@ -2501,6 +3057,8 @@ Private Function PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver As Selen
     End If
     
     Dim By As New SeleniumWrapper.By
+    
+    Dim popupResult As PeopleSoft_Page_PopupCheckResult
     
     Dim i As Long
     Dim paginationText As String, posTo As Integer, posOf As Integer
@@ -2616,9 +3174,9 @@ Private Function PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver As Selen
                     Dim poLineStatus As String
                     poLineStatus = driver.findElementById("PO_LINE_CANCEL_STATUS$" & pageLineIndex).text
                     
-                    If poLineStatus <> "Active" Then
+                    If poLineStatus <> "Active" And poLineStatus <> "Open" Then
                         poChangeOrder.PO_ChangeOrder_Items(i).HasError = True
-                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line status is not active"
+                        poChangeOrder.PO_ChangeOrder_Items(i).ItemError = "Cannot process change order for item: line status is not Active or Open"
                         
                         GoTo ChangeOrderFailed
                     End If
@@ -2672,8 +3230,9 @@ Private Function PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver As Selen
                     '<a id="PO_PNLS_WRK_GOTO_LINE_DTLS$2" href="javascript:submitAction_win0(document.win0,'PO_PNLS_WRK_GOTO_LINE_DTLS$2');" tabindex="557" name="PO_PNLS_WRK_GOTO_LINE_DTLS$2">
                     
                    ' <a href="javascript:hAction_win0(document.win0,'PO_PNLS_WRK_CHANGE_LINE', 0, 0, 'Create Line Change', false, true);" tabindex="16" id="PO_PNLS_WRK_CHANGE_LINE" name="PO_PNLS_WRK_CHANGE_LINE"><img border="0" title="Create Line Change" alt="Create Line Change" name="PO_PNLS_WRK_CHANGE_LINE$IMG" src="/cs/ps/cache/PS_DELTA_ICN_1.gif"></a>
-                    Dim tmp As String
-                    tmp = driver.findElementById("PO_LINE_SHIP_DUE_DT$" & (pageScheduleIndex)).getAttribute("disabled")
+                    
+                    'Dim tmp As String
+                    'tmp = driver.findElementById("PO_LINE_SHIP_DUE_DT$" & (pageScheduleIndex)).getAttribute("disabled")
                     
                     
                     ' Click on change order triangle for this schedule
@@ -2697,18 +3256,15 @@ Private Function PeopleSoft_ChangeOrder_ProcessLineScheduleItems(driver As Selen
             
         End If
         
-        Debug.Print
         
         If pageLineTo < pageLineTotal And numProcessed < poChangeOrder.PO_ChangeOrder_ItemCount And Not isSinglePagePO Then
             ' Next page
             driver.findElementById("PO_SCR_NAV_WRK_NEXT_ITEM_BUTTON").Click
-            PeopleSoft_Page_WaitForProcessing driver
-            
-            
-            Dim popupText As String
-            popupText = PeopleSoft_Page_SuppressPopup(driver, vbOK)
-            
             PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+            
+            popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True)
+            PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+            ' Do we need to check the status of any of these popups?
         End If
     Loop Until pageLineTo = pageLineTotal Or isSinglePagePO
         
@@ -2728,6 +3284,13 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
     
     Debug_Print "PeopleSoft_Receipt_CreateReceipt called (" & Debug_VarListString("PO ID", rcpt.PO_ID, "Mode", IIf(rcpt.ReceiveMode = RECEIVE_SPECIFIED, "<SPECIFIED>", "<ALL>"), "ReceiptItemsCount", rcpt.ReceiptItemCount) & ")"
 
+
+    If PeopleSoft_Receipt_CreateReceipt_PreCheck(rcpt) = False Then
+        ' GlobalError and HasError set by PreCheck
+        GoTo ReceiptFailed
+    End If
+
+
     If DEBUG_OPTIONS.CaptureExceptions Then On Error GoTo ExceptionThrown
 
     'Dim session As PeopleSoft_Session
@@ -2740,24 +3303,6 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
     
     Dim By As New By, Assert As New Assert, Verify As New Verify
     Dim i As Integer, j As Integer
-    
-    ' Pre-Check ensure there are no duplicate PO lines/schedules in ReceiptItems
-    For i = 1 To rcpt.ReceiptItemCount
-        For j = i + 1 To rcpt.ReceiptItemCount
-            If rcpt.ReceiptItems(i).PO_Line = rcpt.ReceiptItems(j).PO_Line And rcpt.ReceiptItems(i).PO_Schedule = rcpt.ReceiptItems(j).PO_Schedule Then
-                rcpt.ReceiptItems(i).HasError = True
-                rcpt.ReceiptItems(j).HasError = True
-                rcpt.ReceiptItems(i).ItemError = "Duplicate line/schedule"
-                rcpt.ReceiptItems(j).ItemError = "Duplicate line/schedule"
-                
-                rcpt.HasGlobalError = True
-                rcpt.GlobalError = "Duplicate line/schedule in one more receipt lines"
-            End If
-        Next j
-    Next i
-    
-    If rcpt.HasGlobalError = True Then GoTo ReceiptFailed
-    
     
     
     PeopleSoft_Login session
@@ -3056,7 +3601,14 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
     End If
         
         
-    ' Exit function <-- UNCOMMENT TO EXIT BEFORE Receiving
+        
+    If DEBUG_OPTIONS.QuitBeforeSave Then
+        rcpt.GlobalError = "Debug option QuitBeforeSave enabled. Processing halted before saving. To prevent this from occurring, disable QuitBeforeSave option."
+        rcpt.GlobalError = True
+        PeopleSoft_Receipt_CreateReceipt = False
+        Exit Function
+    End If
+    
             
     ' Save Receipt
     'driver.findElementById("#ICSave").Click
@@ -3084,6 +3636,7 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
         
         GoTo ReceiptFailed
     End If
+    
     
     ' We received correct popup -> acknowledge
     PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, vbYes
@@ -3121,11 +3674,11 @@ Public Function PeopleSoft_Receipt_CreateReceipt(ByRef session As PeopleSoft_Ses
         
         If popupCheckResult.IsExpected = False Then
             popupCountCheck = popupCountCheck + 1
-            Debug.Print "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.popupText
-            'rcpt.GlobalError = rcpt.GlobalError & "Popup Received after Receipt " & popupCountCheck & ": " & popupCheckResult.PopupText & vbCrLf
-        
-            PeopleSoft_Page_WaitForProcessing driver
+            Debug_Print "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.popupText
+            rcpt.GlobalError = rcpt.GlobalError & "Popup received after Receipt " & popupCountCheck & ": " & popupCheckResult.popupText & vbCrLf
         End If
+        
+        PeopleSoft_Page_WaitForProcessing driver
     Loop
         
         
@@ -3162,7 +3715,7 @@ ReceiptFailed:
     PeopleSoft_Receipt_CreateReceipt = False
     
     Debug_Print "PeopleSoft_Receipt_CreateReceipt: ERROR: " & rcpt.GlobalError
-    PeopleSoft_SaveDebugInfo driver, "Receipt"
+    PeopleSoft_SaveDebugInfo driver
     Exit Function
        
 ExceptionThrown:
@@ -3172,9 +3725,122 @@ ExceptionThrown:
     rcpt.GlobalError = "Exception: " & Err.Description
     
     Debug_Print "PeopleSoft_Receipt_CreateReceipt: ERROR: " & rcpt.GlobalError
-    PeopleSoft_SaveDebugInfo driver, "Receipt"
+    PeopleSoft_SaveDebugInfo driver
 
 
+
+End Function
+Private Function PeopleSoft_Receipt_CreateReceipt_PreCheck(rcpt As PeopleSoft_Receipt) As Boolean
+
+    
+    Debug_Print "PeopleSoft_Receipt_CreateReceipt_PreCheck: Receipt (" & Debug_VarListString("PO BU", rcpt.PO_BU, "PO ID", rcpt.PO_ID) & ")"
+    
+    Dim i As Long, j As Long
+    
+    For i = 1 To rcpt.ReceiptItemCount
+        With rcpt.ReceiptItems(i)
+            Debug_Print "PeopleSoft_Receipt_CreateReceipt_PreCheck: Receipt Item: (" & Debug_VarListString("PO Line", .PO_Line, "PO Schedule", .PO_Schedule, "Receive Qty", .Receive_Qty) & ")"
+        End With
+    Next i
+    
+    
+    ' Begin - Check required fields
+    If Len(rcpt.PO_BU) = 0 Then
+        rcpt.PO_BU_Result.ValidationErrorText = "PO BU is required."
+        rcpt.PO_BU_Result.ValidationFailed = True
+        rcpt.HasGlobalError = True
+    End If
+    If Len(rcpt.PO_ID) = 0 Then
+        rcpt.PO_ID_Result.ValidationErrorText = "PO BU is required."
+        rcpt.PO_ID_Result.ValidationFailed = True
+        rcpt.HasGlobalError = True
+    End If
+    
+    If rcpt.HasGlobalError Then
+        rcpt.GlobalError = "One or more required fields are missing"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    If PeopleSoft_ValidateField_IsSingleLine("PO BU", rcpt.PO_BU, rcpt.PO_BU_Result) = False Then rcpt.HasGlobalError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO ID", rcpt.PO_ID, rcpt.PO_ID_Result) = False Then rcpt.HasGlobalError = True
+    
+    If rcpt.HasGlobalError Then
+        rcpt.GlobalError = "One or more fields failed pre-check"
+        GoTo PreCheckFailed
+    End If
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+
+
+    Dim anyItemHasErrors As Boolean
+
+
+    ' Begin - Check for duplicate PO lines/schedules in Receipt Items
+    anyItemHasErrors = False
+    
+    For i = 1 To rcpt.ReceiptItemCount
+        For j = i + 1 To rcpt.ReceiptItemCount
+            If rcpt.ReceiptItems(i).PO_Line = rcpt.ReceiptItems(j).PO_Line _
+              And rcpt.ReceiptItems(i).PO_Schedule = rcpt.ReceiptItems(j).PO_Schedule Then
+                rcpt.ReceiptItems(i).HasError = True
+                rcpt.ReceiptItems(j).HasError = True
+                rcpt.ReceiptItems(i).ItemError = "Duplicate line/schedule"
+                rcpt.ReceiptItems(j).ItemError = "Duplicate line/schedule"
+                anyItemHasErrors = True
+            End If
+        Next j
+    Next i
+    
+    If anyItemHasErrors Then
+        rcpt.GlobalError = "Duplicate line/schedule in one more receipt items"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check for duplicate PO lines/schedules in  Receipt Items
+    
+    
+    ' Begin - Validate Receipt Items
+    anyItemHasErrors = False
+
+    For i = 1 To rcpt.ReceiptItemCount
+        With rcpt.ReceiptItems(i)
+            If .PO_Line < 1 Then
+                .HasError = True
+                .ItemError = .ItemError & "PO Line must be zero or greater" & vbCrLf
+                anyItemHasErrors = True
+            End If
+            If .PO_Schedule < 1 Then
+                .HasError = True
+                .ItemError = .ItemError & "PO Schedule must be zero or greater" & vbCrLf
+                anyItemHasErrors = True
+            End If
+            If .Receive_Qty < 0 Then
+                .HasError = True
+                .ItemError = .ItemError & "Receive qty must be zero (receive entire line) or greater (receive specified amount)" & vbCrLf
+                anyItemHasErrors = True
+            End If
+        End With
+    Next i
+    
+    If anyItemHasErrors Then
+        rcpt.GlobalError = "One or more change items have pre-check errors"
+        GoTo PreCheckFailed
+    End If
+    ' End - Validate Receipt Items
+    
+    
+
+    
+    
+    PeopleSoft_Receipt_CreateReceipt_PreCheck = True
+    Exit Function
+
+PreCheckFailed:
+    rcpt.HasGlobalError = True
+    Debug_Print "PeopleSoft_Receipt_CreateReceipt_PreCheck: Failed! " & rcpt.GlobalError
+    PeopleSoft_Receipt_CreateReceipt_PreCheck = False
 
 End Function
 ' PeopleSoft_Receipt_ExtractUnreceivedItems: Extracts all unreceived items from PS Receipt page. Assumes we already navigated to page. Returns count but populated the paremeter unreceivedItems
@@ -3421,15 +4087,15 @@ Private Function PeopleSoft_Receipt_MapReceiptItemsToPageReceiptLines(ReceiptIte
     PeopleSoft_Receipt_MapReceiptItemsToPageReceiptLines = map
 
 End Function
-
-
-
-
 Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session As PeopleSoft_Session, ByRef poRetryBC As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams) As Boolean
     
     
     If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
     
+    ' Perform pre-check
+    If PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck_PreCheck(poRetryBC) = False Then
+        GoTo RetryBCFailed
+    End If
     
     Dim By As New By, Assert As New Assert, Verify As New Verify
     Dim driver As SeleniumWrapper.WebDriver
@@ -3439,8 +4105,6 @@ Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session 
     
     If Not session.loggedIn Then
         poRetryBC.GlobalError = "Logon Error: " & session.LogonError
-        poRetryBC.HasGlobalError = True
-        
         GoTo RetryBCFailed
     End If
 
@@ -3448,14 +4112,16 @@ Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session 
     Set driver = session.driver
     
     
-    PeopleSoft_NavigateTo_ExistingPO session, poRetryBC.PO_BU, poRetryBC.PO_ID
+    If PeopleSoft_NavigateTo_ExistingPO(session, poRetryBC.PO_BU, poRetryBC.PO_ID) = False Then
+        poRetryBC.GlobalError = "Failed to navigate to PO"
+        GoTo RetryBCFailed
+    End If
     
-    ' TODO: Check if we navigated to a PO
     
+    ' Check if we are in the budget error page, if so go back to the PO page
     If PeopleSoft_Page_ElementExists(driver, By.XPath(".//*[text()='PO Budget Check Errors']")) Then
         driver.findElementById("#ICCancel").Click
         'driver.runScript "javascript:submitAction_win0(document.win0, '#ICCancel');"
-        
         PeopleSoft_Page_WaitForProcessing driver
     End If
     
@@ -3465,7 +4131,16 @@ Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session 
     poStatusText = driver.findElementById("PSXLATITEM_XLATSHORTNAME").text
     
     If poStatusText = "Approved" Or poStatusText = "Dispatched" Then
+        poRetryBC.GlobalError = "Skipped. PO Status is " & poStatusText  ' Not really an error
         PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck = True
+        Exit Function
+    End If
+    
+        
+    If DEBUG_OPTIONS.QuitBeforeSave Then
+        poRetryBC.GlobalError = "Debug option QuitBeforeSave enabled. Processing halted before saving. To prevent this from occurring, disable QuitBeforeSave option."
+        poRetryBC.HasGlobalError = True
+        PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck = False
         Exit Function
     End If
     
@@ -3488,6 +4163,7 @@ Public Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck(ByRef session 
     
 ValidationFailed:
 RetryBCFailed:
+    poRetryBC.HasGlobalError = True
     PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck = False
     Exit Function
        
@@ -3500,8 +4176,58 @@ ExceptionThrown:
 
 
 End Function
+Private Function PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck_PreCheck(ByRef poRetryBC As PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheckParams) As Boolean
 
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck: PO (" & Debug_VarListString( _
+        "PO BU", poRetryBC.PO_BU, _
+        "PO ID", poRetryBC.PO_ID) _
+        & ")"
+    
+    
+    
+    ' Begin - Check required fields
+    If Len(poRetryBC.PO_BU) = 0 Then
+        poRetryBC.PO_BU_Result.ValidationErrorText = "PO BU is required."
+        poRetryBC.PO_BU_Result.ValidationFailed = True
+        poRetryBC.HasGlobalError = True
+    End If
+    If Len(poRetryBC.PO_ID) = 0 Then
+        poRetryBC.PO_ID_Result.ValidationErrorText = "PO ID is required."
+        poRetryBC.PO_ID_Result.ValidationFailed = True
+        poRetryBC.HasGlobalError = True
+    End If
+    
+    If poRetryBC.HasGlobalError Then
+        poRetryBC.GlobalError = "One or required fields are missing"
+        GoTo PreCheckFailed
+    End If
+    ' End - Check required fields
+    
+    ' Begin - validate fields: ensure single-line fields are actually a single line
+    If PeopleSoft_ValidateField_IsSingleLine("PO BU", poRetryBC.PO_BU, poRetryBC.PO_BU_Result) = False Then poRetryBC.HasGlobalError = True
+    If PeopleSoft_ValidateField_IsSingleLine("PO ID", poRetryBC.PO_ID, poRetryBC.PO_ID_Result) = False Then poRetryBC.HasGlobalError = True
+    
 
+    If poRetryBC.HasGlobalError Then
+        poRetryBC.GlobalError = "One or more fields failed pre-check"
+        GoTo PreCheckFailed
+    End If
+    ' End - validate fields: ensure single-line fields are actually a single line
+    
+    
+    
+    PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck_PreCheck = True
+    Exit Function
+    
+PreCheckFailed:
+    poRetryBC.HasGlobalError = True
+    PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck_PreCheck = False
+
+    
+    Debug_Print "PeopleSoft_PurchaseOrder_RetrySaveWithBudgetCheck_PreCheck: failed! " & poRetryBC.GlobalError
+    
+End Function
 
 Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrapper.WebDriver, ByVal fieldElementID As String, ByVal fieldValue As String, ByRef validationResult As PeopleSoft_Field_ValidationResult, Optional ignoreEmptyValues As Boolean = True, Optional expectedPopupContents As Variant) As Boolean
 
@@ -3510,14 +4236,10 @@ Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrappe
 
     
 
-     
     validationResult.ValidationFailed = False
     validationResult.ValidationErrorText = ""
-
     
-        
-    
-    ' Dont bother if value is empty string or option to ignore empty values is false
+    ' Dont bother if value is empty string and option to ignore empty values is true
     If Len(fieldValue) = 0 And ignoreEmptyValues Then
         PeopleSoft_Page_SetValidatedField = True
         Exit Function
@@ -3525,8 +4247,7 @@ Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrappe
     
     Dim elID As String, elVal As String, elDisabled As String
     
-    elID = Replace(fieldElementID, "'", "\'")
-    
+    elID = Replace$(fieldElementID, "'", "\'")
     
     elDisabled = driver.executeScript("return document.getElementById('" & elID & "').disabled;")
     
@@ -3575,9 +4296,10 @@ Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrappe
         
         Dim popupResult As PeopleSoft_Page_PopupCheckResult
         
-        driver.setImplicitWait 100 ' new in 2.11: override implicit wait (speeds up field entering)
+        driver.setImplicitWait 100 ' new in 2.11: override implicit wait to 100ms (speeds up field entering)
         
         popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True, raiseErrorIfUnexpected:=False, expectedContent:=expectedPopupContents)
+        PeopleSoft_Page_WaitForProcessing driver
         
         driver.setImplicitWait TIMEOUT_IMPLICIT_WAIT ' new in 2.11: restore implicit wait
         
@@ -3600,8 +4322,8 @@ Public Function PeopleSoft_Page_SetValidatedField(ByRef driver As SeleniumWrappe
     'PeopleSoft_Page_SetValidatedField = Not fieldValResult.ValidationFailed
 
 End Function
-' Utility function to create the PO data structure in one line. Must use PeopleSoft_PurchaseOrder_AddLineSimple() to add lines
-Public Function PeopleSoft_PurchaseOrder_NewPO(poBU As String, buyerID As Long, vendor As String, poReference As String) As PeopleSoft_PurchaseOrder
+' Utility function to create the PO data structure in one line. Must use PeopleSoft_PurchaseOrder_AddLine or AddLineSimple() to add lines
+Public Function PeopleSoft_PurchaseOrder_NewPO(poBU As String, buyerID As Long, vendor As Variant, poReference As String) As PeopleSoft_PurchaseOrder
 
     Dim po As PeopleSoft_PurchaseOrder
     
@@ -3614,10 +4336,50 @@ Public Function PeopleSoft_PurchaseOrder_NewPO(poBU As String, buyerID As Long, 
     Else
         po.PO_Fields.VENDOR_NAME_SHORT = vendor
     End If
+    
+    PeopleSoft_PurchaseOrder_NewPO = po
 
 End Function
+' Utility function to add a line to a PO structure. Must be followed by PeopleSoft_PurchaseOrder_NewSchedule() or schedule added manually.
+Public Function PeopleSoft_PurchaseOrder_NewLine(ByRef purchaseOrder As PeopleSoft_PurchaseOrder, lineItemID As String, Optional lineItemDesc As String) As PeopleSoft_PurchaseOrder_Line
+    
+    purchaseOrder.PO_LineCount = purchaseOrder.PO_LineCount + 1
+
+    ReDim Preserve purchaseOrder.PO_Lines(1 To purchaseOrder.PO_LineCount) As PeopleSoft_PurchaseOrder_Line
+    
+    With purchaseOrder.PO_Lines(purchaseOrder.PO_LineCount)
+        .ScheduleCount = 0
+    
+        .LineFields.PO_LINE_ITEM_ID = lineItemID
+        If IsMissing(lineItemDesc) = False Then .LineFields.PO_LINE_DESC = lineItemDesc
+    End With
+    
+    PeopleSoft_PurchaseOrder_NewLine = purchaseOrder.PO_Lines(purchaseOrder.PO_LineCount)
+    
+End Function
+' Utility function to add a schedule to a PO line structure
+Public Function PeopleSoft_PurchaseOrder_NewSchedule(ByRef poLine As PeopleSoft_PurchaseOrder_Line, schQty As Currency, shipDueDate As Date, shipToId As Long, distBusinessUnit As String, distProjectCode As String, distActivityID As String, Optional locationID As Long = 0, Optional schPrice As Currency = 0) As PeopleSoft_PurchaseOrder_Schedule
+
+    poLine.ScheduleCount = poLine.ScheduleCount + 1
+    
+    ReDim Preserve poLine.Schedules(1 To poLine.ScheduleCount) As PeopleSoft_PurchaseOrder_Schedule
+    
+    With poLine.Schedules(poLine.ScheduleCount)
+        .ScheduleFields.DUE_DATE = shipDueDate
+        .ScheduleFields.SHIPTO_ID = shipToId
+        .ScheduleFields.QTY = schQty
+        .ScheduleFields.PRICE = schPrice
+        .DistributionFields.BUSINESS_UNIT_PC = distBusinessUnit
+        .DistributionFields.PROJECT_CODE = distProjectCode
+        .DistributionFields.ACTIVITY_ID = distActivityID
+        .DistributionFields.LOCATION_ID = locationID
+    End With
+    
+    PeopleSoft_PurchaseOrder_NewSchedule = poLine.Schedules(poLine.ScheduleCount)
+    
+End Function
 ' Utility function to add a line to a PO structure with a single schedule.
-Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleSoft_PurchaseOrder, lineItemID As String, lineItemDesc As String, schQty As Currency, shipDueDate As Date, shipToId As Long, distBusinessUnit As String, distProjectCode As String, distActivityID As String, Optional locationID As Long = 0, Optional schPrice As Currency = 0)
+Public Function PeopleSoft_PurchaseOrder_NewSimpleLine(ByRef purchaseOrder As PeopleSoft_PurchaseOrder, lineItemID As String, lineItemDesc As String, schQty As Currency, shipDueDate As Date, shipToId As Long, distBusinessUnit As String, distProjectCode As String, distActivityID As String, Optional locationID As Long = 0, Optional schPrice As Currency = 0) As PeopleSoft_PurchaseOrder_Line
 
     
     Dim PO_LineCount As Integer
@@ -3645,7 +4407,9 @@ Public Sub PeopleSoft_PurchaseOrder_AddLineSimple(ByRef purchaseOrder As PeopleS
     
     purchaseOrder.PO_LineCount = PO_LineCount
     
-End Sub
+    PeopleSoft_PurchaseOrder_NewSimpleLine = purchaseOrder.PO_Lines(PO_LineCount)
+    
+End Function
 Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumWrapper.WebDriver, ByRef budgetCheckResult As PeopleSoft_PurchaseOrder_BudgetCheckResult) As Boolean
 
     
@@ -3666,9 +4430,9 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     Dim swByPOId As SeleniumWrapper.By
     Dim wePOId As SeleniumWrapper.WebElement
     
-    
+    Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: Clicking 'Save with Budget Check'"
     driver.findElementById("PO_KK_WRK_PB_BUDGET_CHECK").Click
-    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+    PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_INFINITE
     
     ' Acknowledge/Take action with popups
     Do
@@ -3678,9 +4442,11 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
         If popupResult.popupText Like "*below PO line schedules exist with $0.00 or blank pricing*" Then
             ' Acknowledge Popup with message: The below PO line schedules exist with $0.00 or blank pricing.
             PeopleSoft_Page_AcknowledgePopup driver, popupResult, vbOK
+            PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_INFINITE
         ElseIf popupResult.popupText Like "*Vendor * requires a Valid Contract*" Then
             ' Acknowlede popup with: Warning -- Vendor XXX requires a Valid Contract. Note: we will cancel the PO at this time.
             PeopleSoft_Page_AcknowledgePopup driver, popupResult, vbOK
+            PeopleSoft_Page_WaitForProcessing driver
             
             budgetCheckResult.GlobalError = "Unexpected Popup: " & popupResult.popupText
             budgetCheckResult.HasGlobalError = True
@@ -3713,16 +4479,19 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     
     ' Begin - Deal with the new screen which asks about quantities in available excess
     If PeopleSoft_Page_ElementExists(driver, By.XPath(".//title[contains(text(),'Excess Available')]")) Then
+        Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: Excess Available popup page found"
+        
         driver.findElementById("Z_CAT_AVL_WRK_IGNORE_PB").Click
         driver.runScript "javascript: submitAction_win0(document.win0,'Z_CAT_AVL_WRK_IGNORE_PB');"
-        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_LONG
+        PeopleSoft_Page_WaitForProcessing driver, TIMEOUT_INFINITE
     End If
     ' End - Deal with the new screen which asks about quantities in available excess
     
     
     
-    ' Check for popup while savings again
+    ' Check for popup while saving again
     popupResult = PeopleSoft_Page_CheckForPopup(driver:=driver, acknowledgePopup:=True)
+    PeopleSoft_Page_WaitForProcessing driver
     
     If popupResult.HasPopup Then ' Error while saving
         budgetCheckResult.GlobalError = popupResult.popupText
@@ -3769,6 +4538,7 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     If elementExists_PO_ID_budgetCheckPassed Then
         ' Budget check passed
         Set wePOId = driver.findElementByXPath(".//*[starts-with(@id,'PO_HDR_PO_ID')]") 'driver.findElementByid("PO_HDR_PO_ID$14$")
+        Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: Found header ID element (" & Debug_VarListString("elementID", wePOId.getAttribute("id"), "PO ID", wePOId.text) & ")"
         
         If wePOId.text = "NEXT" Then ' Error while saving
             budgetCheckResult.GlobalError = "Unknown error - Invalid PO ID Generated: " & wePOId.text
@@ -3781,6 +4551,7 @@ Public Function PeopleSoft_PurchaseOrder_SaveWithBudgetCheck(driver As SeleniumW
     Else
         ' Budget check failed
         Set wePOId = driver.findElementById("Z_KK_ERR_WRK_PO_ID")
+        Debug_Print "PeopleSoft_PurchaseOrder_SaveWithBudgetCheck: Found header ID element (" & Debug_VarListString("elementID", wePOId.getAttribute("id"), "PO ID", wePOId.text) & ")"
         
         budgetCheckResult.PO_ID = wePOId.text
         
@@ -3808,6 +4579,7 @@ ExceptionThrown:
 End Function
 Public Function PeopleSoft_PurchaseOrder_BudgetCheckResult_ExtractFromPage(driver As SeleniumWrapper.WebDriver, ByRef budgetCheckResult As PeopleSoft_PurchaseOrder_BudgetCheckResult) As Boolean
 
+    Debug_Print "PeopleSoft_PurchaseOrder_BudgetCheckResult_ExtractFromPage called"
     Dim By As New SeleniumWrapper.By
     
     ' Click View All - by Line
@@ -3946,37 +4718,48 @@ Private Function PeopleSoft_Page_GetInputElementValue(driver As SeleniumWrapper.
 
 End Function
 
-Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver, Optional timeout_s As Long = 60, Optional waitForLoader As Boolean = False)
+Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver, Optional ByVal timeout_s As Long = 60, Optional waitForLoader As Boolean = False)
 
     
-    Const POLL_INTERVAL_MS As Double = 500 ' 0.5 s
+    Const POLL_INTERVAL_MS As Double = 500 ' Poll every 0.5 s
     
     Dim iter As Integer
     Dim loader_inProcess As Boolean, proc_visibility As Variant
+    Dim loader_exists As Boolean
+    Dim infiniteTimeout As Boolean
+    
+    infiniteTimeout = False
+    
+    If timeout_s = TIMEOUT_INFINITE Then
+        infiniteTimeout = True ' No timeout
+    ElseIf timeout_s = 0 Then
+        timeout_s = 60  'Default to 60s if timeout not given
+    End If
+    
+    Debug.Assert timeout_s >= -1
     
     
-    Dim MAX_ITER As Double
+    Dim MAX_ITER As Long
     
-    MAX_ITER = timeout_s * 1000 / POLL_INTERVAL_MS
-    
+    If infiniteTimeout = False Then MAX_ITER = timeout_s * 1000 / POLL_INTERVAL_MS
     iter = 0
     
     
     ' If waitForLoader is set -> wait for page loader to exist before the next step
     If waitForLoader Then
         Do
-            loader_inProcess = driver.executeScript("return (loader != null);")
-            If loader_inProcess Then Exit Do
+            loader_exists = driver.executeScript("return (loader != null);")
+            If loader_exists Then Exit Do
             
             driver.Wait POLL_INTERVAL_MS
         
             DoEvents
             iter = iter + 1
-        Loop Until iter > MAX_ITER Or loader_inProcess
+        Loop Until (iter > MAX_ITER And infiniteTimeout = False) Or loader_exists
         
     
-        If iter > MAX_ITER Then
-            Err.Raise 513, , "PeopleSoft_Page_WaitForProcessing Timeout during waitForLoader"
+        If infiniteTimeout = False And iter > MAX_ITER Then
+            Err.Raise 513, , "PeopleSoft_Page_WaitForProcessing: Timeout during waitForLoader"
         End If
     End If
     
@@ -3994,11 +4777,11 @@ Public Sub PeopleSoft_Page_WaitForProcessing(driver As SeleniumWrapper.WebDriver
         DoEvents
     
         iter = iter + 1
-    Loop Until iter > MAX_ITER Or (proc_visibility <> "visible" And loader_inProcess = False)
+    Loop Until (iter > MAX_ITER And infiniteTimeout = False) Or (proc_visibility <> "visible" And loader_inProcess = False)
     
 
-    If iter > MAX_ITER Then
-        Err.Raise 513, , "PeopleSoft_Page_WaitForProcessing Timeout"
+    If infiniteTimeout = False And iter > MAX_ITER Then
+        Err.Raise 513, , "PeopleSoft_Page_WaitForProcessing: Timeout"
     End If
     
 
@@ -4181,7 +4964,7 @@ Public Sub PeopleSoft_Page_AcknowledgePopup(driver As SeleniumWrapper.WebDriver,
         driver.findElementByXPath(".//*[@id='" & popupCheckResult.PopupElementID & "']/descendant::*[@id='#ICNo']").Click
     End If
     
-    PeopleSoft_Page_WaitForProcessing driver
+    'PeopleSoft_Page_WaitForProcessing driver, timeout_s
     
     Exit Sub
     
@@ -4189,38 +4972,6 @@ ExceptionThrown:
     Err.Raise Err.Number, Err.Source, "PeopleSoft_Page_AcknowledgePopup: " & Err.Description, Err.Helpfile, Err.HelpContext
 
 End Sub
-' PeopleSoft_Page_SuppressPopup: Wrapper function to acknowledge popup and return only the text. This is deprecated but retained for backward compatibility. Use PeopleSoft_Page_CheckForPopup instead
-Public Function PeopleSoft_Page_SuppressPopup(driver As SeleniumWrapper.WebDriver, clickButton As VbMsgBoxResult, Optional matchText As String = "") As String
-
-    Debug_Print "PeopleSoft_Page_SuppressPopup called (redirecting to PeopleSoft_Page_CheckForPopup)"
-    
-    Dim popupCheckResult As PeopleSoft_Page_PopupCheckResult
-
-    If DEBUG_OPTIONS.AddMethodNamePrefixToExceptions Then On Error GoTo ExceptionThrown
-    
-
-    popupCheckResult = PeopleSoft_Page_CheckForPopup(driver)
-    If popupCheckResult.HasPopup = False Then Exit Function
-    
-    PeopleSoft_Page_SuppressPopup = popupCheckResult.popupText
-    
-    If matchText <> "" Then
-        If Not popupCheckResult.popupText Like matchText Then
-            Debug.Print "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match '" & matchText & "'"
-            Err.Raise -1, , "PeopleSoft_Page_SuppressPopup: Unexpected popup. Text does not match." & vbCrLf & "Popup Text: " & popupCheckResult.popupText & vbCrLf & "Match: " & matchText & ""
-            Exit Function
-        End If
-    End If
-    
-    PeopleSoft_Page_AcknowledgePopup driver, popupCheckResult, clickButton
-    
-    Exit Function
-
-ExceptionThrown:
-    Err.Raise Err.Number, Err.Source, "PeopleSoft_Page_SuppressPopup: " & Err.Description, Err.Helpfile, Err.HelpContext
-
-End Function
-
 
 Private Function CurrencyFromString(strCur As String) As Currency
 
