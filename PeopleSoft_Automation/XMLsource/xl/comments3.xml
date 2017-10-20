@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Joseph Huntley</author></authors><commentList><comment ref="A3" authorId="0"><text><r><rPr><b/><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t>Joseph Huntley:</t></r><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t xml:space="preserve">
+Field not used by automation tool
+
+Use the USER_DATA field to store any data to later cross-reference the receipt results.
+
+</t></r></text></comment><comment ref="D3" authorId="0"><text><r><rPr><b/><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t>Joseph Huntley:</t></r><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t xml:space="preserve">
+Input
+
+Set to PO Line to ALL receive all receivable lines in the PO</t></r></text></comment><comment ref="F3" authorId="0"><text><r><rPr><b/><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t>Joseph Huntley:</t></r><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t xml:space="preserve">
+Both Input &amp; Output
+
+Set the Receive Qty field to partially receive on a specific line. 
+
+Leave Receive Qty blank will tell the software to perform a full receive on the subject line(s)
+
+</t></r></text></comment><comment ref="K3" authorId="0"><text><r><rPr><b/><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t>Joseph Huntley:</t></r><r><rPr><sz val="9"/><color indexed="81"/><rFont val="Tahoma"/><family val="2"/></rPr><t xml:space="preserve">
+Leave this field blank or the receipt will not be processed.
+
+Conversely, enter any text to skip receipt.</t></r></text></comment></commentList></comments>

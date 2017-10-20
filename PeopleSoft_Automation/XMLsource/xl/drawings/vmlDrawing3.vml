@@ -1,0 +1,106 @@
+<xml xmlns:v="urn:schemas-microsoft-com:vml"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel">
+ <o:shapelayout v:ext="edit">
+  <o:idmap v:ext="edit" data="12"/>
+ </o:shapelayout><v:shapetype id="_x0000_t201" coordsize="21600,21600" o:spt="201"
+  path="m,l,21600r21600,l21600,xe">
+  <v:stroke joinstyle="miter"/>
+  <v:path shadowok="f" o:extrusionok="f" strokeok="f" fillok="f" o:connecttype="rect"/>
+  <o:lock v:ext="edit" shapetype="t"/>
+ </v:shapetype><v:shape id="_x0000_s12289" type="#_x0000_t201" style='position:absolute;
+  margin-left:67.5pt;margin-top:6pt;width:208.5pt;height:21.75pt;z-index:1;
+  mso-wrap-style:tight' o:button="t" fillcolor="buttonFace [67]" strokecolor="windowText [64]"
+  o:insetmode="auto">
+  <v:fill color2="buttonFace [67]" o:detectmouseclick="t"/>
+  <o:lock v:ext="edit" rotation="t"/>
+  <v:textbox style='mso-direction-alt:auto' o:singleclick="f">
+   <div style='text-align:center'><font face="Calibri" size="220"
+   color="#000000">Process Receipt Queue</font></div>
+  </v:textbox>
+  <x:ClientData ObjectType="Button">
+   <x:Anchor>
+    1, 2, 0, 8, 4, 11, 0, 37</x:Anchor>
+   <x:PrintObject>False</x:PrintObject>
+   <x:AutoFill>False</x:AutoFill>
+   <x:FmlaMacro>[0]!Process_PO_Receipt_Queue</x:FmlaMacro>
+   <x:TextHAlign>Center</x:TextHAlign>
+   <x:TextVAlign>Center</x:TextVAlign>
+  </x:ClientData>
+ </v:shape><v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202"
+  path="m,l,21600r21600,l21600,xe">
+  <v:stroke joinstyle="miter"/>
+  <v:path gradientshapeok="t" o:connecttype="rect"/>
+ </v:shapetype><v:shape id="_x0000_s12290" type="#_x0000_t202" style='position:absolute;
+  margin-left:373.5pt;margin-top:57pt;width:240pt;height:156pt;z-index:2;
+  visibility:hidden;mso-wrap-style:tight' fillcolor="#ffffe1" o:insetmode="auto">
+  <v:fill color2="#ffffe1"/>
+  <v:shadow on="t" color="black" obscured="t"/>
+  <v:path o:connecttype="none"/>
+  <v:textbox style='mso-direction-alt:auto'>
+   <div style='text-align:left'></div>
+  </v:textbox>
+  <x:ClientData ObjectType="Note">
+   <x:MoveWithCells/>
+   <x:SizeWithCells/>
+   <x:Anchor>
+    5, 69, 2, 12, 7, 256, 12, 20</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:Row>2</x:Row>
+   <x:Column>5</x:Column>
+  </x:ClientData>
+ </v:shape><v:shape id="_x0000_s12291" type="#_x0000_t202" style='position:absolute;
+  margin-left:1590.75pt;margin-top:40.5pt;width:765pt;height:112.5pt;z-index:3;
+  visibility:hidden;mso-wrap-style:tight' fillcolor="#ffffe1" o:insetmode="auto">
+  <v:fill color2="#ffffe1"/>
+  <v:shadow on="t" color="black" obscured="t"/>
+  <v:path o:connecttype="none"/>
+  <v:textbox style='mso-direction-alt:auto'>
+   <div style='text-align:left'></div>
+  </v:textbox>
+  <x:ClientData ObjectType="Note">
+   <x:MoveWithCells/>
+   <x:SizeWithCells/>
+   <x:Anchor>
+    12, 438, 1, 10, 26, 74, 8, 21</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:Row>2</x:Row>
+   <x:Column>10</x:Column>
+  </x:ClientData>
+ </v:shape><v:shape id="_x0000_s12292" type="#_x0000_t202" style='position:absolute;
+  margin-left:232.5pt;margin-top:43.5pt;width:198.75pt;height:135pt;z-index:4;
+  visibility:hidden;mso-wrap-style:tight' fillcolor="#ffffe1" o:insetmode="auto">
+  <v:fill color2="#ffffe1"/>
+  <v:shadow on="t" color="black" obscured="t"/>
+  <v:path o:connecttype="none"/>
+  <v:textbox style='mso-direction-alt:auto'>
+   <div style='text-align:left'></div>
+  </v:textbox>
+  <x:ClientData ObjectType="Note">
+   <x:MoveWithCells/>
+   <x:SizeWithCells/>
+   <x:Anchor>
+    3, 25, 1, 14, 6, 59, 10, 14</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:Row>2</x:Row>
+   <x:Column>3</x:Column>
+  </x:ClientData>
+ </v:shape><v:shape id="_x0000_s12293" type="#_x0000_t202" style='position:absolute;
+  margin-left:78pt;margin-top:43.5pt;width:177.75pt;height:79.5pt;z-index:5;
+  visibility:hidden;mso-wrap-style:tight' fillcolor="#ffffe1" o:insetmode="auto">
+  <v:fill color2="#ffffe1"/>
+  <v:shadow on="t" color="black" obscured="t"/>
+  <v:path o:connecttype="none"/>
+  <v:textbox style='mso-direction-alt:auto'>
+   <div style='text-align:left'></div>
+  </v:textbox>
+  <x:ClientData ObjectType="Note">
+   <x:MoveWithCells/>
+   <x:SizeWithCells/>
+   <x:Anchor>
+    1, 16, 1, 14, 3, 56, 6, 23</x:Anchor>
+   <x:AutoFill>False</x:AutoFill>
+   <x:Row>2</x:Row>
+   <x:Column>0</x:Column>
+  </x:ClientData>
+ </v:shape></xml>
